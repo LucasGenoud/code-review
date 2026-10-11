@@ -1,5 +1,6 @@
 services:
   app:
+    image: ghcr.io/lucasgenoud/code-review:latest
     build: .
     ports:
       - "3001:3000"
@@ -20,6 +21,7 @@ services:
   # Runs LLM-written code for the chat agent (off until enabled in Settings).
   # No network at all: it talks to the app only through the job folder.
   sandbox:
+    image: ghcr.io/lucasgenoud/code-review-sandbox:latest
     build: ./sandbox
     network_mode: none
     read_only: true

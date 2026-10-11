@@ -19,6 +19,14 @@ The `sandbox` compose service runs LLM-written code. It has no network (it talks
 
 ## Run with Docker
 
+Prebuilt images (published by CI from `main` to GitHub Container Registry):
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Or build from source:
+
 ```bash
 docker compose up -d --build
 ```
