@@ -90,7 +90,7 @@ function ClosedFinding({ finding: f }: { finding: Finding }) {
     >
       <div className="flex min-h-9 items-center gap-2 px-2.5 py-1 text-xs text-muted-foreground">
         {pending ? <Loader2 className="size-3.5 shrink-0 animate-spin" /> : <Icon className="size-3.5 shrink-0" />}
-        <span className="shrink-0 font-medium text-foreground/80">{label}</span>
+        <span className="shrink-0 font-medium text-foreground">{label}</span>
         <span className="min-w-0 truncate">{f.title}</span>
         {f.status === FindingStatus.Dismissed && f.dismissReason && (
           <span className="hidden min-w-0 truncate italic md:inline">“{f.dismissReason}”</span>
@@ -119,7 +119,7 @@ function ClosedFinding({ finding: f }: { finding: Finding }) {
       </div>
 
       {expanded && (
-        <div className="border-t opacity-80">
+        <div className="border-t">
           {f.dismissReason && (
             <p className="px-3 pt-2 text-xs text-muted-foreground">
               <span className="font-medium">Dismissed because:</span> {f.dismissReason}
@@ -137,7 +137,7 @@ function cardClass(f: Finding, color: string | undefined, selectedId: number | n
   return cn(
     "scroll-my-24 overflow-hidden rounded-md border border-l-[3px] bg-card text-card-foreground shadow-xs transition-shadow",
     categoryClasses(color ?? "slate").border,
-    selectedId === f.id && "ring-2 ring-ring/40",
+    selectedId === f.id && "ring-2 ring-ring",
     flashId === f.id && "finding-flash",
   );
 }
@@ -174,11 +174,11 @@ function FindingHead({ finding: f }: { finding: Finding }) {
 function FindingBody({ finding: f }: { finding: Finding }) {
   return (
     <div className="flex flex-col gap-2 px-3 pt-1.5 pb-3">
-      <h3 className="leading-snug font-medium">{f.title}</h3>
-      <p className="leading-relaxed whitespace-pre-wrap text-muted-foreground">{f.explanation}</p>
+      <h3 className="leading-snug font-semibold">{f.title}</h3>
+      <p className="leading-relaxed whitespace-pre-wrap text-foreground">{f.explanation}</p>
 
       {f.failure && (
-        <div className="flex gap-2 rounded-md bg-red-500/5 px-2.5 py-2 text-[13px] ring-1 ring-red-500/15 ring-inset">
+        <div className="flex gap-2 rounded-md bg-red-500/10 px-2.5 py-2 text-[13px] ring-1 ring-red-500/30 ring-inset">
           <Zap className="mt-0.5 size-3.5 shrink-0 text-red-600 dark:text-red-400" aria-hidden />
           <p>
             <span className="font-medium">Failure scenario: </span>

@@ -7,8 +7,8 @@ export default function RulesPage() {
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-8">
       <header className="mb-6">
-        <h1 className="text-xl font-semibold tracking-tight">Rules</h1>
-        <p className="max-w-2xl text-sm text-muted-foreground">
+        <h1 className="text-2xl font-semibold tracking-tight">Rules</h1>
+        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
           Global rules for every project. Switches set the default; a project can turn categories and rules on or off,
           or override a rule, from its own Rules page.
         </p>

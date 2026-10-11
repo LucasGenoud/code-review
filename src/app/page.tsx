@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { ChevronRight, FolderGit2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Card } from "@/components/ui/card";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { AddProjectDialog } from "@/components/add-project-dialog";
 import { ConfirmButton } from "@/components/projects/confirm-button";
@@ -15,8 +16,8 @@ export default function Home() {
     <main className="mx-auto w-full max-w-4xl px-4 py-8">
       <header className="mb-6 flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Projects</h1>
-          <p className="text-sm text-muted-foreground">Local git repositories you review.</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
+          <p className="text-sm leading-6 text-muted-foreground">Local git repositories you review.</p>
         </div>
         <AddProjectDialog />
       </header>
@@ -49,11 +50,13 @@ async function ProjectList() {
   }
 
   return (
-    <ul className="divide-y overflow-hidden rounded-xl border bg-card">
-      {projects.map((p) => (
-        <ProjectRow key={p.id} project={p} />
-      ))}
-    </ul>
+    <Card className="gap-0 py-0">
+      <ul className="divide-y">
+        {projects.map((p) => (
+          <ProjectRow key={p.id} project={p} />
+        ))}
+      </ul>
+    </Card>
   );
 }
 
@@ -62,17 +65,19 @@ async function ProjectRow({ project }: { project: Project }) {
   const [last] = await listReviews(project.id);
 
   return (
-    <li className="group relative flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50">
-      <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
+    <li className="group relative flex items-center gap-4 px-5 py-5 transition-colors hover:bg-muted/50">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-muted">
+        <FolderGit2 className="size-5 text-primary" />
+      </div>
 
       <div className="min-w-0 flex-1">
         <Link
           href={`/projects/${project.id}`}
-          className="font-medium outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
+          className="text-base font-semibold outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset"
         >
           {project.name}
         </Link>
-        <p className="truncate font-mono text-xs text-muted-foreground">{project.path}</p>
+        <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{project.path}</p>
       </div>
 
       <div className="hidden shrink-0 items-center gap-2 text-xs text-muted-foreground sm:flex">
@@ -98,7 +103,7 @@ async function ProjectRow({ project }: { project: Project }) {
         />
       </div>
 
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" aria-hidden />
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
     </li>
   );
 }

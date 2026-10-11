@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AlertCircle, ChevronRight, History, ListChecks } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { AutoRefresh } from "@/components/projects/auto-refresh";
@@ -52,7 +53,7 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
           <Link href="/" className="mb-1 inline-block text-xs text-muted-foreground hover:text-foreground">
             ← Projects
           </Link>
-          <h1 className="text-xl font-semibold tracking-tight">{project.name}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
           <p className="truncate font-mono text-xs text-muted-foreground">{project.path}</p>
         </div>
         <Button variant="outline" render={<Link href={`/projects/${id}/rules`} />} nativeButton={false}>
@@ -65,15 +66,17 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="flex min-w-0 flex-col gap-6">
-          <section className="rounded-xl border bg-card p-4 shadow-xs">
-            <h2 className="mb-3 text-sm font-medium">New review</h2>
-            <Suspense fallback={<Skeleton className="h-28 w-full" />}>
-              <NewReview projectId={id} blocker={blocker} />
-            </Suspense>
-          </section>
+          <Card>
+            <CardHeader><CardTitle><h2>New review</h2></CardTitle></CardHeader>
+            <CardContent>
+              <Suspense fallback={<Skeleton className="h-28 w-full" />}>
+                <NewReview projectId={id} blocker={blocker} />
+              </Suspense>
+            </CardContent>
+          </Card>
 
           <section className="flex flex-col gap-3">
-            <h2 className="text-sm font-medium">Review history</h2>
+            <h2 className="text-base font-semibold">Review history</h2>
             <Suspense fallback={<Skeleton className="h-32 w-full" />}>
               <ReviewHistory projectId={id} />
             </Suspense>

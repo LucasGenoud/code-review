@@ -18,11 +18,11 @@ export function AppHeader() {
   const { resolvedTheme, setTheme } = useTheme();
 
   return (
-    <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur supports-backdrop-filter:bg-background/60">
-      <div className="mx-auto flex h-12 max-w-screen-2xl items-center gap-6 px-4">
-        <Link href="/" className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-          <GitPullRequestArrow className="size-4" />
-          PR Review
+    <header className="sticky top-0 z-40 border-b bg-card">
+      <div className="mx-auto flex h-12 max-w-screen-2xl items-center gap-3 px-4 sm:gap-6">
+        <Link href="/" aria-label="PR Review" className="flex shrink-0 items-center gap-2 rounded-md text-sm font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <GitPullRequestArrow className="size-5 text-primary" />
+          <span className="hidden sm:inline">PR Review</span>
         </Link>
 
         {/* Pathname is unknown while dynamic routes prerender: links show without the active state. */}
@@ -51,18 +51,22 @@ function ActiveNav() {
 
 function NavLinks({ pathname }: { pathname: string | null }) {
   return (
-    <nav className="flex items-center gap-1 text-sm">
+    <nav aria-label="Main navigation" className="flex items-center gap-1 text-sm">
       {NAV.map((item) => (
-        <Link
+        <Button
           key={item.href}
-          href={item.href}
+          variant={pathname !== null && item.match(pathname) ? "secondary" : "ghost"}
+          size="sm"
+          role="link"
+          nativeButton={false}
+          render={<Link href={item.href} aria-current={pathname !== null && item.match(pathname) ? "page" : undefined} />}
           className={cn(
-            "rounded-md px-2.5 py-1 text-muted-foreground transition-colors hover:text-foreground",
-            pathname !== null && item.match(pathname) && "bg-muted font-medium text-foreground",
+            "h-8 px-3",
+            pathname !== null && item.match(pathname) ? "text-foreground ring-1 ring-border" : "text-muted-foreground",
           )}
         >
           {item.label}
-        </Link>
+        </Button>
       ))}
     </nav>
   );

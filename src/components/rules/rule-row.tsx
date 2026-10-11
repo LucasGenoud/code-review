@@ -98,10 +98,10 @@ export function RuleRow({ rule, projectId }: Props) {
   }
 
   return (
-    <li className={cn("group/rule flex items-start gap-3 px-4 py-2 hover:bg-muted/40", !view.enabled && "text-muted-foreground")}>
+    <li className={cn("group/rule grid grid-cols-[auto_auto_minmax(0,1fr)] items-start gap-x-3 gap-y-2 border-t px-4 py-3 hover:bg-muted/50 sm:flex", !view.enabled && "text-muted-foreground")}>
       <Switch
         size="sm"
-        className="mt-1.5"
+        className="col-start-1 row-start-1 mt-1.5"
         checked={view.enabled}
         onCheckedChange={(enabled) => save({ enabled })}
         aria-label={`Enable rule ${key}`}
@@ -111,10 +111,10 @@ export function RuleRow({ rule, projectId }: Props) {
         value={view.severity}
         onChange={(severity: Severity) => save({ severity })}
         label={`Severity of rule ${key}`}
-        className={cn("h-6 w-[5.5rem] justify-between border-transparent px-1 hover:border-input dark:bg-transparent", !view.enabled && "opacity-60")}
+        className={cn("col-start-2 row-start-1 h-6 w-[5.5rem] justify-between border-transparent px-1 hover:border-input dark:bg-transparent", !view.enabled && "opacity-60")}
       />
 
-      <div className="min-w-0 flex-1 pt-0.5">
+      <div className="col-span-3 row-start-2 min-w-0 flex-1 pt-0.5">
         {editing ? (
           <div className="flex flex-col gap-2" onKeyDown={onKeyDown}>
             <label className="text-sm font-medium">
@@ -139,13 +139,13 @@ export function RuleRow({ rule, projectId }: Props) {
               !view.enabled && "line-through decoration-muted-foreground/40",
             )}
           >
-            <span className="block font-medium">{view.name}</span>
-            <span className="block text-muted-foreground">{view.description}</span>
+            <span className="block font-semibold">{view.name}</span>
+            {view.description !== view.name && <span className="mt-1 block text-foreground/90">{view.description}</span>}
           </button>
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1 pt-0.5">
+      <div className="col-start-3 row-start-1 flex shrink-0 items-center justify-self-end gap-1 pt-0.5">
         {rule.overridden && (
           <Tooltip>
             <TooltipTrigger
@@ -164,7 +164,7 @@ export function RuleRow({ rule, projectId }: Props) {
           <span className="rounded px-1 text-[11px] text-muted-foreground ring-1 ring-border">This project</span>
         )}
 
-        <span className="w-10 text-right font-mono text-[11px] text-muted-foreground/70">{key}</span>
+        <span className="w-10 text-right font-mono text-[11px] text-muted-foreground">{key}</span>
 
         {overridable ? (
           <span className="size-7" aria-hidden />

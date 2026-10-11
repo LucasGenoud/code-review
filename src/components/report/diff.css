@@ -1,13 +1,14 @@
-/* Diff viewer tuned to the app theme: same background, mono font. */
+/* Diff viewer tuned to the app theme: clear gutters, card surface, mono font. */
 .report-diff .diff-tailwindcss-wrapper .diff-style-root {
-  --diff-plain-content--: var(--background);
+  --diff-plain-content--: var(--card);
+  --diff-plain-lineNumber--: var(--muted);
   --diff-empty-content--: var(--muted);
   --diff-border--: var(--border);
   font-family: var(--font-mono), ui-monospace, monospace;
 }
 
 .report-diff .diff-tailwindcss-wrapper[data-theme="dark"] .diff-style-root {
-  --diff-plain-lineNumber--: var(--background);
+  --diff-plain-lineNumber--: var(--muted);
   --diff-expand-content--: var(--muted);
   --diff-expand-lineNumber--: var(--muted);
 }

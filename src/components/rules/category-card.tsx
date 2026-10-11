@@ -74,24 +74,24 @@ export function CategoryCard({ category: c, projectId }: Props) {
     <Collapsible
       defaultOpen={c.enabled}
       id={`category-${c.id}`}
-      className={cn("scroll-mt-16 overflow-hidden rounded-xl border border-l-4 bg-card", categoryClasses(c.color).border)}
+      className={cn("scroll-mt-16 overflow-hidden rounded-xl border border-l-4 bg-card shadow-xs", categoryClasses(c.color).border)}
     >
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 bg-muted/50 px-4 py-4">
         <CollapsibleTrigger
           aria-label={`Show rules of ${c.name}`}
-          className="group -ml-1 flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="group -ml-1 flex size-6 self-start items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:self-center"
         >
           <ChevronRight className="size-4 transition-transform group-data-panel-open:rotate-90" />
         </CollapsibleTrigger>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex min-w-0 flex-1 basis-[calc(100%_-_2.25rem)] flex-col gap-1 sm:basis-0">
           <div className="flex flex-wrap items-center gap-2">
             <CategoryBadge name={c.name} color={c.color} />
             <span className="text-xs text-muted-foreground">
               {[KIND_LABELS[c.kind], c.scope === Scope.Global ? "Global" : "This project"].filter(Boolean).join(" · ")}
             </span>
           </div>
-          <p className="truncate text-xs text-muted-foreground">
+          <p className="text-[13px] leading-5 text-muted-foreground">
             <span className="font-mono">
               {globs.length === 0 ? "All files" : globs.slice(0, MAX_GLOBS_SHOWN).join("  ")}
               {globs.length > MAX_GLOBS_SHOWN && ` +${globs.length - MAX_GLOBS_SHOWN}`}
@@ -104,7 +104,7 @@ export function CategoryCard({ category: c, projectId }: Props) {
           {active}/{c.rules.length} rules
         </span>
 
-        <div className="flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1">
           {inherited && (
             <Tooltip>
               <TooltipTrigger
@@ -144,7 +144,7 @@ export function CategoryCard({ category: c, projectId }: Props) {
         </div>
       </header>
 
-      <CollapsibleContent className={cn("border-t", !enabled && "opacity-60")}>
+      <CollapsibleContent className={cn("border-t", !enabled && "bg-muted/40")}>
         {c.rules.length === 0 && <p className="px-4 pt-3 text-sm text-muted-foreground">No rules yet.</p>}
 
         <ul className="divide-y divide-border/60">

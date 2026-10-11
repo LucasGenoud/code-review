@@ -273,11 +273,11 @@ export function ReportView({ report, chat, canVerify }: Props) {
         />
 
         <div className="grid min-h-0 flex-1 lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(0,1fr)_380px]">
-          <aside className="hidden min-h-0 overflow-y-auto border-r lg:block">
+          <aside className="hidden min-h-0 overflow-y-auto border-r bg-sidebar lg:block">
             <FileList files={report.files} units={report.units} findings={findings} categories={categories} />
           </aside>
 
-          <main className="min-h-0 overflow-y-auto" aria-label="Diff">
+          <main className="min-h-0 overflow-y-auto bg-card" aria-label="Diff">
             <Overview summary={report.review.summary} running={running} />
             {report.files.length === 0 ? (
               <NoChanges running={running} />
@@ -294,7 +294,7 @@ export function ReportView({ report, chat, canVerify }: Props) {
             )}
           </main>
 
-          <aside className="hidden min-h-0 border-l xl:block" aria-label="Findings">
+          <aside className="hidden min-h-0 border-l bg-sidebar xl:block" aria-label="Findings">
             {panel}
           </aside>
         </div>

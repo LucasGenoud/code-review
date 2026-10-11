@@ -26,15 +26,15 @@ export function RulesEditor({ categories, projectId }: Props) {
   return (
     <div className="grid gap-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
       <nav aria-label="Categories" className="hidden lg:block">
-        <ul className="sticky top-16 flex flex-col gap-0.5 text-sm">
+        <ul className="sticky top-16 flex flex-col gap-1 rounded-xl border bg-card p-2 text-sm shadow-xs">
           {categories.map((c) => (
             <li key={c.id}>
               <a
                 href={`#category-${c.id}`}
-                className="flex items-center gap-2 rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="flex items-center gap-2 rounded-md px-2 py-2 text-foreground hover:bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <CategoryDot color={c.color} />
-                <span className={c.enabled ? "truncate" : "truncate line-through opacity-60"}>{c.name}</span>
+                <span className={c.enabled ? "truncate" : "truncate line-through text-muted-foreground"}>{c.name}</span>
                 {c.scope === Scope.Project && <span className="text-[10px] uppercase">proj</span>}
                 <span className="ml-auto text-xs tabular-nums">{c.rules.length}</span>
               </a>

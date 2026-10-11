@@ -17,8 +17,8 @@ export default function SettingsPage() {
   return (
     <main className="mx-auto w-full max-w-4xl px-4 py-8">
       <header className="mb-6">
-        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">LLM providers and models, and how reviews run.</p>
+        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <p className="text-sm leading-6 text-muted-foreground">LLM providers and models, and how reviews run.</p>
       </header>
 
       <Suspense fallback={<SettingsSkeleton />}>
@@ -56,7 +56,7 @@ async function SettingsView() {
       <Section title="Providers & models" action={providers.length > 0 && addProvider}>
         {providers.length === 0 ? (
           <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed p-8 text-center">
-            <p className="max-w-sm text-sm text-muted-foreground">
+            <p className="max-w-sm text-sm leading-6 text-muted-foreground">
               No providers yet. Add the API that serves your model: a cloud API or a local server like vLLM, Ollama or LM Studio.
             </p>
             {addProvider}

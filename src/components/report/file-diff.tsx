@@ -18,7 +18,7 @@ import { fileAnchor, isInDiff, lineStats, newLineRanges, sortFindings, splitPath
 // One changed file: sticky header, unified diff, findings inline under the
 // line they end on. Findings outside the shown hunks are listed on top.
 
-const DIFF_FONT_SIZE = 12;
+const DIFF_FONT_SIZE = 13;
 
 type Theme = "light" | "dark";
 
@@ -68,7 +68,7 @@ function FileHeader({ file, units, findings }: Omit<Props, "theme">) {
   const failed = units.filter((u) => u.status === UnitStatus.Failed).length;
 
   return (
-    <header className="sticky top-0 z-10 flex h-10 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-backdrop-filter:bg-background/80">
+    <header className="sticky top-0 z-10 flex h-10 items-center gap-2 border-b bg-muted px-4">
       <ChangeIcon change={file.change} />
       <h2 className="min-w-0 truncate font-mono text-[13px]" title={file.path}>
         {file.oldPath && file.oldPath !== file.path && (

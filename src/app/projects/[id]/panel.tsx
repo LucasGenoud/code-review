@@ -1,4 +1,6 @@
-// Side panel section of the project page: title row, optional hint, body.
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+// Shared shadcn card gives project panels consistent headings and spacing.
 export function Panel({
   title,
   hint,
@@ -11,15 +13,13 @@ export function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-3 rounded-xl border bg-card p-4">
-      <header className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h2 className="text-sm font-medium">{title}</h2>
-          {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-        </div>
-        {action}
-      </header>
-      {children}
-    </section>
+    <Card role="region" aria-label={title}>
+      <CardHeader>
+        <CardTitle><h2>{title}</h2></CardTitle>
+        {hint && <CardDescription className="text-xs leading-5">{hint}</CardDescription>}
+        {action && <CardAction>{action}</CardAction>}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">{children}</CardContent>
+    </Card>
   );
 }

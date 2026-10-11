@@ -34,8 +34,8 @@ async function ProjectRules({ params }: { params: Promise<{ id: string }> }) {
           <Link href={`/projects/${id}`} className="mb-1 inline-block text-xs text-muted-foreground hover:text-foreground">
             ← {project.name}
           </Link>
-          <h1 className="text-xl font-semibold tracking-tight">Rules</h1>
-          <p className="max-w-2xl text-sm text-muted-foreground">
+          <h1 className="text-2xl font-semibold tracking-tight">Rules</h1>
+          <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
             Changes here apply to this project only. Edit a global rule to override it; reset to follow the global rule again.
           </p>
         </div>
