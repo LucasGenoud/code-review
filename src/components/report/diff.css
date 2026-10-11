@@ -1,0 +1,39 @@
+/* Diff viewer tuned to the app theme: same background, mono font. */
+.report-diff .diff-tailwindcss-wrapper .diff-style-root {
+  --diff-plain-content--: var(--background);
+  --diff-empty-content--: var(--muted);
+  --diff-border--: var(--border);
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+.report-diff .diff-tailwindcss-wrapper[data-theme="dark"] .diff-style-root {
+  --diff-plain-lineNumber--: var(--background);
+  --diff-expand-content--: var(--muted);
+  --diff-expand-lineNumber--: var(--muted);
+}
+
+/* Inline finding cards use app colors, not the diff's black/white text. */
+.report-diff .diff-line-extend-wrapper {
+  color: var(--foreground);
+}
+
+/* Brief pulse after jumping to a finding. */
+.finding-flash {
+  animation: finding-flash 1.6s ease-out;
+}
+
+@keyframes finding-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 70%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .finding-flash {
+    animation: none;
+  }
+}

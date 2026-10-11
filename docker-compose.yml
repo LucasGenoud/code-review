@@ -1,0 +1,49 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3001:3000"
+    environment:
+      - SANDBOX_DIR=/sandbox
+    volumes:
+      # Named volume: SQLite WAL fails on Windows bind mounts (no shared memory).
+      - data:/data
+      # Relative to this file: same folder from Windows or WSL.
+      - ..:/repos
+      # Job folder shared with the sandbox runner.
+      - sandbox:/sandbox
+    depends_on:
+      - sandbox
+
+    restart: unless-stopped
+
+  # Runs LLM-written code for the chat agent (off until enabled in Settings).
+  # No network at all: it talks to the app only through the job folder.
+  sandbox:
+    build: ./sandbox
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    # Just enough to hand each job to `nobody` and clean up after it.
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
+    volumes:
+      - sandbox:/sandbox
+      - ..:/repos:ro
+    restart: unless-stopped
+
+volumes:
+  data:
+  sandbox:
