@@ -11,6 +11,43 @@ beforeAll(() => {
 });
 
 describe("named rules", () => {
+  it("validates a whole batch before storing any rules", async () => {
+    const rules = await import("./rules");
+    const categoryId = rules.createCategory(null, {
+      name: "Batch", color: CATEGORY_COLORS[0], description: "", globs: "",
+    });
+    const first = { name: " Constants ", description: " Use named values. ", severity: Severity.Minor, enabled: true };
+    const second = { ...first, name: "Types", description: "Avoid implicit any.", severity: Severity.Major };
+
+    expect(() => rules.addRules(categoryId, null, [first, { ...second, description: " " }])).toThrow();
+    expect(rules.globalRules().find((c) => c.id === categoryId)!.rules).toHaveLength(0);
+    expect(() => rules.addRules(categoryId, null, [])).toThrow();
+    expect(rules.addRules(categoryId, null, [first, second])).toBe(2);
+    expect(rules.globalRules().find((c) => c.id === categoryId)!.rules).toMatchObject([
+      { name: "Constants", description: "Use named values.", severity: Severity.Minor },
+      { name: "Types", description: "Avoid implicit any.", severity: Severity.Major },
+    ]);
+  });
+
+  it("keeps a batch local to its project and checks category ownership", async () => {
+    const rules = await import("./rules");
+    const { insertProject } = await import("@/server/drivers/projectStore");
+    const project = insertProject("Batch app", "/batch-rule-test");
+    const categoryId = rules.createCategory(null, {
+      name: "Project batch", color: CATEGORY_COLORS[0], description: "", globs: "",
+    });
+    const input = { name: "Constants", description: "Use named values.", severity: Severity.Minor, enabled: true };
+
+    rules.addRules(categoryId, project.id, [input, { ...input, name: "Types" }]);
+    expect(rules.globalRules().find((c) => c.id === categoryId)!.rules).toHaveLength(0);
+    expect(rules.projectRules(project.id).find((c) => c.id === categoryId)!.rules).toHaveLength(2);
+
+    const localId = rules.createCategory(project.id, {
+      name: "Local", color: CATEGORY_COLORS[0], description: "", globs: "",
+    });
+    expect(() => rules.addRules(localId, null, [input])).toThrow("Category belongs to another project");
+  });
+
   it("requires and trims both fields before storing a rule", async () => {
     const rules = await import("./rules");
     const categoryId = rules.createCategory(null, {

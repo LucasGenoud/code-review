@@ -64,7 +64,7 @@ export async function resetCategory(projectId: number, id: number) {
 
 // A rule requires a name and description.
 // projectId set = rules only for that project.
-export async function addRules(categoryId: number, projectId: number | null, input: rules.RuleInput) {
+export async function addRules(categoryId: number, projectId: number | null, input: rules.RuleInput | rules.RuleInput[]) {
   const result = await attempt(() => rules.addRules(categoryId, projectId, input));
   refresh();
   return result;

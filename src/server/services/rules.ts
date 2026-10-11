@@ -231,22 +231,22 @@ function requireCategory(id: number): Category {
 
 // --- rules -----------------------------------------------------------------
 
-// Adds a named rule; projectId set limits it to that project.
+// Adds named rules together; projectId limits them to that project.
 export function addRules(
   categoryId: number,
   projectId: number | null,
-  input: RuleInput,
+  input: RuleInput | RuleInput[],
 ): number {
   const category = requireCategory(categoryId);
   if (category.projectId !== null && category.projectId !== projectId) {
     throw new InputError("Category belongs to another project");
   }
 
-  // Validate both fields before writing the rule.
-  const rule = ruleSchema.parse(input);
+  // Validate the entire batch before the single insert.
+  const batch = z.array(ruleSchema).min(1).parse(Array.isArray(input) ? input : [input]);
   const position = rulesFor(projectId).filter((r) => r.categoryId === categoryId).length;
-  insertRules([{ ...rule, categoryId, projectId, position }]);
-  return 1;
+  insertRules(batch.map((rule, index) => ({ ...rule, categoryId, projectId, position: position + index })));
+  return batch.length;
 }
 
 // Edits a rule in place: global rules from the global page, project-only

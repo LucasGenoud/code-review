@@ -20,6 +20,7 @@ import {
   type CategoryView,
 } from "@/app/rules/actions";
 import { AddRulesForm } from "./add-rules-form";
+import { BulkRulesForm } from "./bulk-rules-form";
 import { CategoryDialog } from "./category-dialog";
 import { RuleRow } from "./rule-row";
 
@@ -154,6 +155,7 @@ export function CategoryCard({ category: c, projectId }: Props) {
         </ul>
 
         <AddRulesForm categoryId={c.id} projectId={projectId} />
+        <BulkRulesForm categoryId={c.id} projectId={projectId} />
       </CollapsibleContent>
     </Collapsible>
   );
