@@ -34,8 +34,9 @@ export function FileDiff({ file, units, findings, theme }: Props) {
   const { categories } = useReport();
   const ranges = newLineRanges(file.patch);
   const sorted = sortFindings(findings, categories);
-  const inline = sorted.filter((f) => isInDiff(f, file, ranges));
-  const outside = sorted.filter((f) => !isInDiff(f, file, ranges));
+  // Skipped diffs are hidden; keep saved fixes visible for undo above them.
+  const inline = sorted.filter((f) => file.state !== FileState.Skipped && isInDiff(f, file, ranges));
+  const outside = sorted.filter((f) => file.state === FileState.Skipped || !isInDiff(f, file, ranges));
 
   // Finding ids grouped by their last line: { "16": { data: [12, 13] } }.
   // Ids, not findings: the diff library deep-traverses this data.

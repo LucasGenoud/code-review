@@ -62,10 +62,10 @@ export async function resetCategory(projectId: number, id: number) {
   return result;
 }
 
-// One rule per pasted line; bullets and numbering are stripped.
+// A rule requires a name and description.
 // projectId set = rules only for that project.
-export async function addRules(categoryId: number, projectId: number | null, pasted: string, severity: Severity) {
-  const result = await attempt(() => rules.addRules(categoryId, projectId, pasted, severity));
+export async function addRules(categoryId: number, projectId: number | null, input: rules.RuleInput) {
+  const result = await attempt(() => rules.addRules(categoryId, projectId, input));
   refresh();
   return result;
 }
@@ -86,7 +86,7 @@ export async function removeRule(id: number) {
 export async function overrideRule(
   projectId: number,
   ruleId: number,
-  patch: { text?: string | null; severity?: Severity | null; enabled?: boolean | null },
+  patch: { name?: string | null; description?: string | null; severity?: Severity | null; enabled?: boolean | null },
 ) {
   const result = await attempt(() => rules.overrideRule(projectId, ruleId, patch));
   refresh();

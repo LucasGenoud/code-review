@@ -9,6 +9,8 @@ import {
   SEVERITY_RANK,
   UnitStatus,
 } from "@/lib/domain";
+import { fixByFinding, restoreFix, saveFix, undoableFixes, type FixState } from "@/server/drivers/fixStore";
+import { resolveCommit } from "@/server/drivers/git";
 import { readBytes, writeText } from "@/server/drivers/fs";
 import { projectById } from "@/server/drivers/projectStore";
 import {
@@ -58,6 +60,7 @@ export type Report = {
   findings: Finding[];
   units: UnitView[];
   running: boolean;
+  undoableFixes: number[];
 };
 
 // "main...feature", "HEAD~1..HEAD", "working tree".
@@ -114,6 +117,7 @@ export function getReport(reviewId: number): Report {
       outputTokens: u.outputTokens,
     })),
     running: isRunning(reviewId),
+    undoableFixes: undoableFixes(reviewId),
   };
 }
 
@@ -148,48 +152,139 @@ export function reopenFinding(id: number): void {
   updateFinding(id, { status: FindingStatus.Open, dismissReason: null });
 }
 
-// Writes the suggested fix into the working tree. Refuses when the quoted
-// code changed since the review, so nothing is overwritten blindly.
-export async function applyFix(id: number): Promise<void> {
+// Serialize writes within a project so simultaneous fixes cannot lose edits.
+const fixLocks = new Map<number, Promise<void>>();
+const COMMIT_LABEL_LENGTH = 7;
+
+async function withFixLock(id: number, action: () => Promise<void>): Promise<void> {
   const finding = requireFinding(id);
-  if (!finding.replacement) {
+  const projectId = requireReview(finding.reviewId).projectId;
+  const previous = fixLocks.get(projectId) ?? Promise.resolve();
+  const pending = previous.catch(() => {}).then(action);
+  fixLocks.set(projectId, pending);
+  try {
+    await pending;
+  } finally {
+    if (fixLocks.get(projectId) === pending) {
+      fixLocks.delete(projectId);
+    }
+  }
+}
+
+// Fixes always write to the checked-out tree, never a different branch.
+export async function applyFix(id: number): Promise<void> {
+  await withFixLock(id, () => applyFindingFix(id));
+}
+
+async function applyFindingFix(id: number): Promise<void> {
+  const finding = requireFinding(id);
+  if (finding.replacement === null) {
     throw new InputError("This finding has no suggested fix");
   }
 
+  if (finding.status !== FindingStatus.Open || fixByFinding(id)) {
+    throw new InputError("Only open findings can be fixed");
+  }
+
+  const { file, project, review } = fixTarget(finding);
+  const headSha = await resolveCommit(project.path, "HEAD");
+  if (review.headSha !== null && review.headSha !== headSha) {
+    throw new InputError(`Check out the reviewed head "${review.head ?? review.headSha}" (${review.headSha.slice(0, COMMIT_LABEL_LENGTH)}) before applying fixes. Refresh the review if that branch has moved.`);
+  }
+
+  const bytes = await readBytes(file);
+  if (!bytes) {
+    throw new InputError(`File not found in the working tree: ${finding.path}. Restore the file or refresh the review.`);
+  }
+
+  const before = bytes.toString("utf8");
+  const after = replaceQuote(before, finding.quote, finding.replacement);
+  if (after === null) {
+    throw new InputError("The quoted code changed or appears more than once. Refresh the review.");
+  }
+
+  // Snapshot affected positions before re-anchoring for an exact undo.
+  const states = fixStates(finding, after);
+  await writeText(file, after);
+  try {
+    saveFix({ findingId: id, before, after, headSha, findingStates: JSON.stringify(states) }, states);
+  } catch (error) {
+    await writeText(file, before);
+    throw error;
+  }
+}
+
+// Restore the saved version only while it is still the file's current content.
+export async function undoFix(id: number): Promise<void> {
+  await withFixLock(id, () => undoFindingFix(id));
+}
+
+async function undoFindingFix(id: number): Promise<void> {
+  const finding = requireFinding(id);
+  const fix = fixByFinding(id);
+  if (!fix || finding.status !== FindingStatus.Fixed) {
+    throw new InputError("This finding has no applied fix to undo");
+  }
+
+  const { file, project } = fixTarget(finding);
+  if (await resolveCommit(project.path, "HEAD") !== fix.headSha) {
+    throw new InputError("The checked-out commit changed since the fix. Check out the original commit before undoing it.");
+  }
+
+  const bytes = await readBytes(file);
+  if (!bytes || bytes.toString("utf8") !== fix.after) {
+    throw new InputError("The file changed since this fix. Undo later fixes or restore subsequent edits before undoing it.");
+  }
+
+  // Leave later dismissals and other finding decisions intact.
+  const states = (JSON.parse(fix.findingStates) as FixState[]).filter((state) => {
+    const current = findingById(state.id);
+    return current?.status === state.after.status && current.startLine === state.after.startLine && current.endLine === state.after.endLine;
+  });
+  await writeText(file, fix.before);
+  try {
+    restoreFix(id, states);
+  } catch (error) {
+    await writeText(file, fix.after);
+    throw error;
+  }
+}
+
+// Resolve the shared target and keep git-provided paths inside the project.
+function fixTarget(finding: Finding) {
   const review = requireReview(finding.reviewId);
   const project = projectById(review.projectId);
   if (!project) {
     throw new InputError("Unknown project");
   }
 
-  // finding.path comes from git, but stays confined to the project anyway.
   const file = path.resolve(project.path, finding.path);
   if (!isInside(project.path, file)) {
     throw new InputError("File is outside the project");
   }
 
-  const bytes = await readBytes(file);
-  if (!bytes) {
-    throw new InputError("File not found in the working tree");
-  }
+  return { file, project, review };
+}
 
-  const updated = replaceQuote(bytes.toString("utf8"), finding.quote, finding.replacement);
-  if (updated === null) {
-    throw new InputError("The quoted code changed or appears more than once. Refresh the review.");
-  }
-
-  await writeText(file, updated);
-  updateFinding(id, { status: FindingStatus.Fixed });
-
-  // Lines of other findings in the file may have shifted.
-  for (const f of findingsForFile(finding.fileId)) {
-    if (f.status !== FindingStatus.Open) {
+// Track only findings affected by the edit; unchanged ones need no inverse.
+function fixStates(finding: Finding, content: string): FixState[] {
+  const states: FixState[] = [];
+  for (const other of findingsForFile(finding.fileId)) {
+    if (other.id === finding.id || other.status !== FindingStatus.Open) {
       continue;
     }
 
-    const span = locate(updated, f.quote, f.startLine);
-    updateFinding(f.id, span ? { startLine: span.start, endLine: span.end } : { status: FindingStatus.Outdated });
+    const span = locate(content, other.quote, other.startLine);
+    const before = { status: other.status, startLine: other.startLine, endLine: other.endLine };
+    const after = span
+      ? { status: other.status, startLine: span.start, endLine: span.end }
+      : { ...before, status: FindingStatus.Outdated };
+    if (before.status !== after.status || before.startLine !== after.startLine || before.endLine !== after.endLine) {
+      states.push({ id: other.id, before, after });
+    }
   }
+
+  return states;
 }
 
 function requireFinding(id: number): Finding {

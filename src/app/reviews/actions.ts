@@ -77,3 +77,10 @@ export async function applyFix(id: number) {
   refresh();
   return result;
 }
+
+// Restore the saved file version and reopen the finding.
+export async function undoFix(id: number) {
+  const result = await attempt(() => reviews.undoFix(id));
+  refresh();
+  return result;
+}

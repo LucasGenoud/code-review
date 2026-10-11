@@ -26,7 +26,7 @@ import { InputError } from "./errors";
 //
 //   global category ──< global rule        (projectId null)
 //         │       └───< project-only rule  (projectId set)
-//         └── per project: category on/off, rule text/severity/on-off overrides
+//         └── per project: category on/off, rule name/description/severity/on-off overrides
 //   project category ──< project rules     (only in that project)
 //
 // effectiveRules(project) flattens this into the snapshot a review uses.
@@ -34,7 +34,8 @@ import { InputError } from "./errors";
 export type RuleView = {
   id: number;
   scope: Scope;
-  text: string;
+  name: string;
+  description: string;
   severity: Severity;
   enabled: boolean;
   // Project view only: values come from a project override.
@@ -57,7 +58,7 @@ export type RulesSnapshot = {
     color: string;
     description: string;
     globs: string[];
-    rules: { id: number; text: string; severity: Severity }[];
+    rules: { id: number; name: string; description: string; severity: Severity }[];
   }[];
 };
 
@@ -69,7 +70,8 @@ const categorySchema = z.object({
 });
 
 const ruleSchema = z.object({
-  text: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  description: z.string().trim().min(1),
   severity: z.enum(Severity),
   enabled: z.boolean(),
 });
@@ -123,7 +125,8 @@ export function projectRules(projectId: number): CategoryView[] {
         return {
           id: r.id,
           scope: r.projectId === null ? Scope.Global : Scope.Project,
-          text: o?.text ?? r.text,
+          name: o?.name ?? r.name,
+          description: o?.description ?? r.description,
           severity: o?.severity ?? r.severity,
           enabled: o?.enabled ?? r.enabled,
           overridden: Boolean(o),
@@ -145,7 +148,7 @@ export function effectiveRules(projectId: number): RulesSnapshot {
       globs: splitGlobs(c.globs),
       rules: c.rules
         .filter((r) => r.enabled)
-        .map((r) => ({ id: r.id, text: r.text, severity: r.severity })),
+        .map((r) => ({ id: r.id, name: r.name, description: r.description, severity: r.severity })),
     }))
     .filter((c) => c.rules.length > 0);
 
@@ -153,7 +156,7 @@ export function effectiveRules(projectId: number): RulesSnapshot {
 }
 
 function pickRule(r: Rule) {
-  return { id: r.id, text: r.text, severity: r.severity, enabled: r.enabled };
+  return { id: r.id, name: r.name, description: r.description, severity: r.severity, enabled: r.enabled };
 }
 
 // --- categories ------------------------------------------------------------
@@ -228,26 +231,22 @@ function requireCategory(id: number): Category {
 
 // --- rules -----------------------------------------------------------------
 
-// Adds one rule per pasted line. projectId set = project-only rules.
+// Adds a named rule; projectId set limits it to that project.
 export function addRules(
   categoryId: number,
   projectId: number | null,
-  pasted: string,
-  severity: Severity,
+  input: RuleInput,
 ): number {
   const category = requireCategory(categoryId);
   if (category.projectId !== null && category.projectId !== projectId) {
     throw new InputError("Category belongs to another project");
   }
 
-  const texts = parseRuleList(pasted);
-  const start = rulesFor(projectId).filter((r) => r.categoryId === categoryId).length;
-  const sev = z.enum(Severity).parse(severity);
-
-  insertRules(
-    texts.map((text, i) => ({ categoryId, projectId, text, severity: sev, position: start + i })),
-  );
-  return texts.length;
+  // Validate both fields before writing the rule.
+  const rule = ruleSchema.parse(input);
+  const position = rulesFor(projectId).filter((r) => r.categoryId === categoryId).length;
+  insertRules([{ ...rule, categoryId, projectId, position }]);
+  return 1;
 }
 
 // Edits a rule in place: global rules from the global page, project-only
@@ -267,7 +266,7 @@ export function removeRule(id: number): void {
 export function overrideRule(
   projectId: number,
   ruleId: number,
-  patch: { text?: string | null; severity?: Severity | null; enabled?: boolean | null },
+  patch: { name?: string | null; description?: string | null; severity?: Severity | null; enabled?: boolean | null },
 ): void {
   const rule = requireRule(ruleId);
   if (rule.projectId !== null) {
@@ -276,7 +275,8 @@ export function overrideRule(
 
   const p = z
     .object({
-      text: z.string().trim().min(1).nullable().optional(),
+      name: z.string().trim().min(1).nullable().optional(),
+      description: z.string().trim().min(1).nullable().optional(),
       severity: z.enum(Severity).nullable().optional(),
       enabled: z.boolean().nullable().optional(),
     })

@@ -1,11 +1,12 @@
 "use client";
 
-import { useOptimistic, useRef, useState, useTransition } from "react";
+import { useOptimistic, useState, useTransition } from "react";
 import { RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "cn";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmButton } from "@/components/projects/confirm-button";
@@ -13,7 +14,7 @@ import { ruleKey, Scope, type Severity } from "@/lib/domain";
 import { editRule, overrideRule, removeRule, resetRule, type RuleView } from "@/app/rules/actions";
 import { SeveritySelect } from "./severity-select";
 
-type Fields = Pick<RuleView, "text" | "severity" | "enabled">;
+type Fields = Pick<RuleView, "name" | "description" | "severity" | "enabled">;
 
 type Props = {
   rule: RuleView;
@@ -21,14 +22,13 @@ type Props = {
   projectId: number | null;
 };
 
-// One rule: on/off, severity, text (click to edit). On a project page,
+// One rule: on/off, severity, name and description (click to edit). On a project page,
 // global rules are tweaked through overrides that can be reset.
 export function RuleRow({ rule, projectId }: Props) {
   const [view, apply] = useOptimistic<Fields, Partial<Fields>>(rule, (cur, patch) => ({ ...cur, ...patch }));
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(rule.text);
+  const [draft, setDraft] = useState({ name: rule.name, description: rule.description });
   const [, startTransition] = useTransition();
-  const closed = useRef(false);
 
   const overridable = projectId !== null && rule.scope === Scope.Global;
   const key = ruleKey(rule.id);
@@ -57,36 +57,41 @@ export function RuleRow({ rule, projectId }: Props) {
   }
 
   function startEdit() {
-    setDraft(view.text);
-    closed.current = false;
+    setDraft({ name: view.name, description: view.description });
     setEditing(true);
   }
 
-  // Called on Enter and on blur; `closed` stops the second call and Esc.
+  // Save both fields together so incomplete edits cannot replace a rule.
   function commit() {
-    if (closed.current) {
+    const name = draft.name.trim();
+    const description = draft.description.trim();
+    if (!name || !description) {
       return;
     }
 
-    closed.current = true;
     setEditing(false);
-    const text = draft.trim();
-    if (!text || text === view.text) {
-      return;
+    const patch: Partial<Fields> = {};
+    if (name !== view.name) {
+      patch.name = name;
     }
 
-    save({ text });
+    if (description !== view.description) {
+      patch.description = description;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      save(patch);
+    }
   }
 
-  // Enter saves, Shift+Enter adds a line, Esc cancels.
+  // Ctrl/Cmd+Enter saves; Escape discards the draft.
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Escape") {
-      closed.current = true;
       setEditing(false);
       return;
     }
 
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       commit();
     }
@@ -111,15 +116,20 @@ export function RuleRow({ rule, projectId }: Props) {
 
       <div className="min-w-0 flex-1 pt-0.5">
         {editing ? (
-          <Textarea
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            onBlur={commit}
-            aria-label={`Text of rule ${key}`}
-            className="min-h-0 py-1 text-sm"
-          />
+          <div className="flex flex-col gap-2" onKeyDown={onKeyDown}>
+            <label className="text-sm font-medium">
+              Name
+              <Input autoFocus value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="mt-1" />
+            </label>
+            <label className="text-sm font-medium">
+              Description
+              <Textarea value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="mt-1 min-h-20 text-sm" />
+            </label>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={commit} disabled={!draft.name.trim() || !draft.description.trim()}>Save</Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+            </div>
+          </div>
         ) : (
           <button
             type="button"
@@ -129,7 +139,8 @@ export function RuleRow({ rule, projectId }: Props) {
               !view.enabled && "line-through decoration-muted-foreground/40",
             )}
           >
-            {view.text}
+            <span className="block font-medium">{view.name}</span>
+            <span className="block text-muted-foreground">{view.description}</span>
           </button>
         )}
       </div>
@@ -162,7 +173,7 @@ export function RuleRow({ rule, projectId }: Props) {
             <ConfirmButton
               label={`Delete rule ${key}`}
               title="Delete this rule?"
-              description={view.text}
+              description={view.name}
               onConfirm={removeRule.bind(null, rule.id)}
             />
           </div>

@@ -20,6 +20,8 @@ type ReportState = {
   dismissingId: number | null;
   setDismissingId: (id: number | null) => void;
   apply: (id: number) => void;
+  undo: (id: number) => void;
+  undoableFixes: number[];
   dismiss: (id: number, reason: string) => void;
   reopen: (id: number) => void;
   ask: (finding: Finding) => void;

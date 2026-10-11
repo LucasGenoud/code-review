@@ -13,7 +13,7 @@ import {
 
 export type CategoryInput = Omit<typeof categories.$inferInsert, "id">;
 export type RuleInput = Omit<typeof rules.$inferInsert, "id">;
-export type RuleOverridePatch = Partial<Pick<RuleOverride, "enabled" | "text" | "severity">>;
+export type RuleOverridePatch = Partial<Pick<RuleOverride, "enabled" | "name" | "description" | "severity">>;
 
 // Global categories plus the project's own (projectId null = global only).
 export function categoriesFor(projectId: number | null): Category[] {

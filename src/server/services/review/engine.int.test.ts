@@ -152,6 +152,6 @@ describe("review pipeline", () => {
 
     const rule = rules.projectRules(project.id).flatMap((c) => c.rules).find((r) => r.id === open.ruleId);
     expect(rule?.overridden).toBe(true);
-    expect(rule?.text).toContain("except in test files");
+    expect(rule?.description).toContain("except in test files");
   }, TIMEOUT_MS);
 });

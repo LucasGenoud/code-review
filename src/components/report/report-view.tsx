@@ -11,6 +11,7 @@ import {
   dismissFinding,
   refreshReview,
   reopenFinding,
+  undoFix,
   type Finding,
   type Report,
 } from "@/app/reviews/actions";
@@ -62,7 +63,7 @@ export function ReportView({ report, chat, canVerify }: Props) {
 
   // Lookups from the rules snapshot the review ran with.
   const categories = new Map(report.rules.categories.map((c) => [c.id, c]));
-  const rules = new Map(report.rules.categories.flatMap((c) => c.rules.map((r) => [r.id, r.text] as const)));
+  const rules = new Map(report.rules.categories.flatMap((c) => c.rules.map((r) => [r.id, `${r.name}: ${r.description}`] as const)));
 
   // Optimistic statuses and in-flight markers; server data wins after refresh.
   const [findings, patchFinding] = useOptimistic(report.findings, (state, p: Patch) =>
@@ -129,6 +130,12 @@ export function ReportView({ report, chat, canVerify }: Props) {
   function apply(id: number) {
     const f = findings.find((x) => x.id === id);
     mutate({ id, status: FindingStatus.Fixed }, () => applyFix(id), f && `Fix applied to ${f.path}`);
+  }
+
+  // Undo restores the file on the server; refresh supplies restored locations.
+  function undo(id: number) {
+    const f = findings.find((x) => x.id === id);
+    mutate({ id, status: FindingStatus.Open }, () => undoFix(id), f && `Fix undone in ${f.path}`);
   }
 
   function dismiss(id: number, reason: string) {
@@ -244,6 +251,8 @@ export function ReportView({ report, chat, canVerify }: Props) {
         dismissingId,
         setDismissingId,
         apply,
+        undo,
+        undoableFixes: report.undoableFixes,
         dismiss,
         reopen,
         ask,

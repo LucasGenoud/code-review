@@ -186,7 +186,7 @@ export function formatRules(categories: SnapshotCategory[]): string {
   return categories
     .map((c) => {
       const head = c.description ? `### ${c.name}: ${c.description}` : `### ${c.name}`;
-      const rules = c.rules.map((r) => `- [${ruleKey(r.id)}] (${r.severity}) ${r.text}`);
+      const rules = c.rules.map((r) => `- [${ruleKey(r.id)}] (${r.severity}) ${r.name}: ${r.description}`);
       return [head, ...rules].join("\n");
     })
     .join("\n\n");
@@ -223,10 +223,10 @@ export function describePrompt(name: string, tree: string, docs: { file: string;
 
 export const RULE_CHANGE_INSTRUCTIONS = `You maintain the rules of an LLM code reviewer. The user dismissed some findings, often with a reason. Propose rule changes so similar false positives stop, without losing real issues.
 Kinds:
-- "edit": rewrite a rule's text to be more precise (e.g. add an exception). Set "rule" and "text".
+- "edit": rewrite a rule's name and description to be more precise (e.g. add an exception). Set "rule", "name" and "description".
 - "severity": change a rule's severity. Set "rule" and "severity".
 - "disable": turn a rule off when it brings no value. Set "rule".
-- "add": a new rule the dismissals reveal is missing. Set "category" (an existing category name), "text" and "severity".
+- "add": a new rule the dismissals reveal is missing. Set "category" (an existing category name), "name", "description" and "severity".
 Each change lists the finding ids that motivated it and a one-sentence rationale.
 Propose nothing for dismissals that look like one-off model mistakes. An empty list is a valid answer.`;
 
@@ -236,7 +236,8 @@ export const ruleChangeSchema = z.object({
       kind: z.enum(["edit", "severity", "disable", "add"]),
       rule: z.string().nullable(),
       category: z.string().nullable(),
-      text: z.string().nullable(),
+      name: z.string().nullable(),
+      description: z.string().nullable(),
       severity: z.enum(Severity).nullable(),
       rationale: z.string(),
       findings: z.array(z.number().int()),

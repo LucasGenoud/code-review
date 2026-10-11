@@ -145,7 +145,9 @@ function parseFile(block: string): ParsedFile {
 }
 
 function stripSide(p: string): string {
-  return p === NULL_PATH ? p : p.replace(SIDE_PREFIX, "");
+  // Git terminates unquoted paths containing spaces with a tab.
+  const file = p.replace(/\t$/, "");
+  return file === NULL_PATH ? file : file.replace(SIDE_PREFIX, "");
 }
 
 // "diff --git a/x b/x" → paths. Ambiguous with spaces; last resort only.

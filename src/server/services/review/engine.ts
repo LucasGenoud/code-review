@@ -10,6 +10,7 @@ import {
   UnitStatus,
 } from "@/lib/domain";
 import { generateObject, generatePlain } from "@/server/drivers/llm";
+import { undoableFixes } from "@/server/drivers/fixStore";
 import { projectById } from "@/server/drivers/projectStore";
 import {
   addReviewTokens,
@@ -561,9 +562,11 @@ export async function refreshReview(reviewId: number): Promise<{ changed: number
   }
 
   // Files no longer in the diff (reverted or committed).
+  const savedFixes = new Set(undoableFixes(reviewId));
   for (const row of rows.values()) {
     deleteUnitsForFile(row.id);
-    deleteFindings(findingsForFile(row.id).map((f) => f.id));
+    // Keep fixed findings and their backups reachable after refresh.
+    deleteFindings(findingsForFile(row.id).filter((f) => !savedFixes.has(f.id)).map((f) => f.id));
     updateFile(row.id, { state: FileState.Skipped, skipReason: "No longer changed" });
   }
 

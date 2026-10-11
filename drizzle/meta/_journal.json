@@ -36,6 +36,20 @@
       "when": 1791742747192,
       "tag": "0004_seed_languages",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791742747193,
+      "tag": "0005_rule_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791742747194,
+      "tag": "0006_fix_undo",
+      "breakpoints": true
     }
   ]
 }

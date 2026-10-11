@@ -100,6 +100,12 @@ function ClosedFinding({ finding: f }: { finding: Finding }) {
         )}
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          {f.status === FindingStatus.Fixed && ctx.undoableFixes.includes(f.id) && (
+            <Button size="xs" variant="ghost" onClick={() => ctx.undo(f.id)} disabled={pending}>
+              <RotateCcw />
+              Undo fix
+            </Button>
+          )}
           {f.status === FindingStatus.Dismissed && (
             <Button size="xs" variant="ghost" onClick={() => ctx.reopen(f.id)} disabled={pending}>
               <RotateCcw />

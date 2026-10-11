@@ -100,7 +100,9 @@ export const rules = sqliteTable("rules", {
     .references(() => categories.id, { onDelete: "cascade" }),
   // Set = rule exists only in this project (even inside a global category).
   projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
-  text: text("text").notNull(),
+  name: text("name").notNull().default(""),
+  // Reuse the legacy column to preserve stored instructions.
+  description: text("text").notNull(),
   severity: text("severity", { enum: values(Severity) }).notNull().$type<Severity>(),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   position: integer("position").notNull().default(0),
@@ -131,7 +133,8 @@ export const ruleOverrides = sqliteTable(
       .notNull()
       .references(() => rules.id, { onDelete: "cascade" }),
     enabled: integer("enabled", { mode: "boolean" }),
-    text: text("text"),
+    name: text("name"),
+    description: text("text"),
     severity: text("severity", { enum: values(Severity) }).$type<Severity>(),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.ruleId] })],
@@ -239,6 +242,16 @@ export const chatMessages = sqliteTable("chat_messages", {
   message: text("message").notNull(),
 });
 
+// Persist exact file versions so undo survives reloads and preserves whitespace.
+export const appliedFixes = sqliteTable("applied_fixes", {
+  findingId: integer("finding_id").primaryKey().notNull().references(() => findings.id, { onDelete: "cascade" }),
+  before: text("before").notNull(),
+  after: text("after").notNull(),
+  headSha: text("head_sha"),
+  // JSON before/after locations and statuses of affected findings.
+  findingStates: text("finding_states").notNull(),
+});
+
 export const ruleChanges = sqliteTable("rule_changes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   projectId: integer("project_id")
@@ -247,7 +260,8 @@ export const ruleChanges = sqliteTable("rule_changes", {
   kind: text("kind", { enum: values(ChangeKind) }).notNull().$type<ChangeKind>(),
   ruleId: integer("rule_id").references(() => rules.id, { onDelete: "set null" }),
   categoryId: integer("category_id").references(() => categories.id, { onDelete: "set null" }),
-  text: text("text"),
+  name: text("name"),
+  description: text("text"),
   severity: text("severity", { enum: values(Severity) }).$type<Severity>(),
   rationale: text("rationale").notNull(),
   // JSON number[]: dismissed findings that motivated the change.

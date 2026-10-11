@@ -106,14 +106,15 @@ function ChangeRow({ change: c, hide }: { change: ChangeView; hide: (id: number)
 // Before → after. Old values struck through, new ones highlighted.
 function ChangeDiff({ change: c }: { change: ChangeView }) {
   const textChanged = c.kind === ChangeKind.Edit || c.kind === ChangeKind.Disable;
-  const before = c.ruleText ?? "(rule no longer exists)";
+  const before = c.ruleDescription ?? "(rule no longer exists)";
 
   return (
     <div className="flex flex-col gap-1 text-sm">
       {c.kind !== ChangeKind.Add && (
         <p className={textChanged ? "rounded bg-red-500/10 px-2 py-1 text-muted-foreground line-through" : "px-2 py-1"}>
           {c.ruleSeverity && <SeverityBadge severity={c.ruleSeverity} className="mr-2 align-middle" />}
-          {before}
+          <strong>{c.ruleName}</strong>
+          <span className="block whitespace-pre-wrap">{before}</span>
         </p>
       )}
 
@@ -128,7 +129,8 @@ function ChangeDiff({ change: c }: { change: ChangeView }) {
       {(c.kind === ChangeKind.Add || c.kind === ChangeKind.Edit) && (
         <p className="rounded bg-green-500/10 px-2 py-1">
           {c.severity && <SeverityBadge severity={c.severity} className="mr-2 align-middle" />}
-          {c.text}
+          <strong>{c.name}</strong>
+          <span className="block whitespace-pre-wrap">{c.description}</span>
         </p>
       )}
     </div>

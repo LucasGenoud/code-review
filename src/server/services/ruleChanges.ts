@@ -26,12 +26,14 @@ export type ChangeView = {
   id: number;
   kind: ChangeKind;
   ruleId: number | null;
-  // Current rule text and severity, for the before/after view.
-  ruleText: string | null;
+  // Current rule name, description and severity, for the before/after view.
+  ruleName: string | null;
+  ruleDescription: string | null;
   ruleSeverity: Severity | null;
   categoryName: string | null;
   categoryColor: string | null;
-  text: string | null;
+  name: string | null;
+  description: string | null;
   severity: Severity | null;
   rationale: string;
   findingIds: number[];
@@ -55,11 +57,13 @@ export function listChanges(projectId: number): ChangeView[] {
       id: c.id,
       kind: c.kind,
       ruleId: c.ruleId,
-      ruleText: target?.rule.text ?? null,
+      ruleName: target?.rule.name ?? null,
+      ruleDescription: target?.rule.description ?? null,
       ruleSeverity: target?.rule.severity ?? null,
       categoryName: category?.name ?? null,
       categoryColor: category?.color ?? null,
-      text: c.text,
+      name: c.name,
+      description: c.description,
       severity: c.severity,
       rationale: c.rationale,
       findingIds: JSON.parse(c.findingIds),
@@ -106,7 +110,7 @@ export async function generateChanges(projectId: number): Promise<number> {
 function formatAll(categories: CategoryView[]): string {
   return categories
     .map((c) => {
-      const rules = c.rules.map((r) => `- [${ruleKey(r.id)}] (${r.severity}${r.enabled ? "" : ", disabled"}) ${r.text}`);
+      const rules = c.rules.map((r) => `- [${ruleKey(r.id)}] (${r.severity}${r.enabled ? "" : ", disabled"}) ${r.name}: ${r.description}`);
       return [`### ${c.name}${c.enabled ? "" : " (disabled)"}`, ...rules].join("\n");
     })
     .join("\n\n");
@@ -147,14 +151,15 @@ function toChange(
 
   if (kind === ChangeKind.Add) {
     const category = categories.find((c) => c.name.toLowerCase() === d.category?.toLowerCase());
-    if (!d.text?.trim()) {
+    if (!d.name?.trim() || !d.description?.trim()) {
       return null;
     }
 
     return {
       ...base,
       categoryId: category?.id ?? fallbackCategory,
-      text: d.text.trim(),
+      name: d.name!.trim(),
+      description: d.description!.trim(),
       severity: d.severity ?? null,
     };
   }
@@ -163,7 +168,7 @@ function toChange(
     return null;
   }
 
-  if (kind === ChangeKind.Edit && !d.text?.trim()) {
+  if (kind === ChangeKind.Edit && (!d.name?.trim() || !d.description?.trim())) {
     return null;
   }
 
@@ -171,7 +176,7 @@ function toChange(
     return null;
   }
 
-  return { ...base, ruleId: rule.id, text: d.text?.trim() || null, severity: d.severity ?? null };
+  return { ...base, ruleId: rule.id, name: d.name?.trim() || null, description: d.description?.trim() || null, severity: d.severity ?? null };
 }
 
 // Applies a change. Project scope = override for this project only;
@@ -192,7 +197,8 @@ export function acceptChange(id: number, scope: ChangeScope): void {
     insertRules([{
       categoryId: category.id,
       projectId: global ? null : project,
-      text: change.text ?? "",
+      name: change.name ?? "",
+      description: change.description ?? "",
       severity: change.severity ?? Severity.Minor,
       position,
     }]);
@@ -206,7 +212,7 @@ export function acceptChange(id: number, scope: ChangeScope): void {
   }
 
   const patch = {
-    [ChangeKind.Edit]: { text: change.text },
+    [ChangeKind.Edit]: { name: change.name, description: change.description },
     [ChangeKind.Severity]: { severity: change.severity },
     [ChangeKind.Disable]: { enabled: false },
   }[change.kind];
