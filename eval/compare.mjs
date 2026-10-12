@@ -18,11 +18,17 @@ if (labels.length === 0) {
 const pct = (x) => `${Math.round(100 * x)}%`;
 const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
 
+// Runs with failed units (overloaded server, timeouts) miss findings: skipped.
 function load(label) {
-  return fs
+  const all = fs
     .readdirSync(RESULTS)
     .filter((f) => f.endsWith(`-${label}.json`))
     .map((f) => JSON.parse(fs.readFileSync(path.join(RESULTS, f), "utf8")));
+  const ok = all.filter((r) => r.failedUnits === 0);
+  if (ok.length < all.length) {
+    console.log(`${label}: skipped ${all.length - ok.length} run(s) with failed units`);
+  }
+  return ok;
 }
 
 const runs = Object.fromEntries(labels.map((l) => [l, load(l)]));
