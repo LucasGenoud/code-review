@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { readSetting, writeSetting } from "@/server/drivers/settingStore";
+import { instruction, PROMPT_DEFAULTS, PromptKey } from "./review/prompts";
 
 enum Key {
   DefaultModel = "default_model_id",
@@ -85,4 +86,31 @@ export function saveSettings(input: AppSettings): void {
   writeSetting(Key.DefaultModel, s.defaultModelId === null ? "" : String(s.defaultModelId));
   writeSetting(Key.IgnoreGlobs, s.ignoreGlobs);
   writeSetting(Key.PassThreshold, String(s.passThreshold));
+}
+
+// --- prompts ---------------------------------------------------------------
+
+// In pipeline order, as Settings lists them.
+const PROMPT_INFO: { key: PromptKey; label: string; help: string }[] = [
+  { key: PromptKey.Overview, label: "Change overview", help: "One call per review: summarizes the whole change for the per-file passes." },
+  { key: PromptKey.Review, label: "Review", help: "Base instructions of every per-file pass. The JSON format is appended automatically." },
+  { key: PromptKey.Bugs, label: "Bugs pass", help: "Added to Review for the built-in Bugs category." },
+  { key: PromptKey.Rules, label: "Rules pass", help: "Added to Review for rule categories." },
+  { key: PromptKey.Lookup, label: "Usage lookup", help: "Before the bugs pass: names what the diff changes, so its usages in other files can be shown." },
+  { key: PromptKey.Usages, label: "Usages", help: "Added to the bugs pass when usages in other files were found." },
+  { key: PromptKey.Describe, label: "Project description", help: "Drafts a project's description from its README, manifests and file tree." },
+  { key: PromptKey.RuleChanges, label: "Rule changes", help: "Turns dismissed findings into proposed rule edits." },
+];
+
+export type PromptView = { key: PromptKey; label: string; help: string; text: string; defaultText: string };
+
+export function listPrompts(): PromptView[] {
+  return PROMPT_INFO.map((p) => ({ ...p, text: instruction(p.key), defaultText: PROMPT_DEFAULTS[p.key] }));
+}
+
+// Empty text, or the default itself, restores the default.
+export function savePrompt(key: PromptKey, text: string): void {
+  const k = z.enum(PromptKey).parse(key);
+  const t = z.string().parse(text).trim();
+  writeSetting(k, t === PROMPT_DEFAULTS[k] ? "" : t);
 }

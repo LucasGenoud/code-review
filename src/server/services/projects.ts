@@ -25,7 +25,7 @@ import { InputError } from "./errors";
 import { resolveInRoot } from "./paths";
 import { resolveModel } from "./providers";
 import { requireRuleSet } from "./ruleSets";
-import { describePrompt, DESCRIBE_INSTRUCTIONS } from "./review/prompts";
+import { describePrompt, instruction, PromptKey } from "./review/prompts";
 import { languageUsage, type LanguageUsage } from "./rules";
 
 export type { ChangedFile, CommitInfo, LanguageUsage, Project };
@@ -182,7 +182,7 @@ export async function describeProject(id: number): Promise<string> {
     }
 
     const { text } = await generatePlain(model.config, {
-      instructions: DESCRIBE_INSTRUCTIONS,
+      instructions: instruction(PromptKey.Describe),
       prompt: describePrompt(project.name, tree, docs),
     });
 

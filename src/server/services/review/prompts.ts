@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { Confidence, FileChange, ruleKey, Severity } from "@/lib/domain";
+import { readSetting } from "@/server/drivers/settingStore";
 import { formatHunks, LineKind, type Hunk, type ParsedFile } from "../diffParse";
 import type { RulesSnapshot } from "../rules";
 
 // Prompt builders for every LLM call. Kept in one place so prompt changes
-// are easy to review.
+// are easy to review. Instructions are editable in Settings (see PromptKey);
+// output formats stay fixed because parsing depends on them.
 
 export enum PassKind {
   Bugs = "bugs",
@@ -48,7 +50,7 @@ export function overviewPrompt(description: string, files: ParsedFile[], budget:
   }
 
   return {
-    instructions: OVERVIEW_INSTRUCTIONS,
+    instructions: instruction(PromptKey.Overview),
     prompt: head + section("Diff (may be truncated)", samples.join("\n\n")),
   };
 }
@@ -71,17 +73,14 @@ const REVIEW_INSTRUCTIONS = `You are a meticulous code reviewer. Review only the
 - "replacement": code that replaces exactly the quoted lines, same indentation, when the fix is local and safe. Otherwise null.
 - If nothing violates the rules, return an empty list.`;
 
-const BUGS_INSTRUCTIONS = `
-This pass is about bugs only: defects that make the code behave incorrectly.
+const BUGS_INSTRUCTIONS = `This pass is about bugs only: defects that make the code behave incorrectly.
 - "failure": a concrete failure, an input or state and the wrong result, e.g. "order_ids=[] → ZeroDivisionError". If you can't name one, don't report the finding.
 - "confidence": "likely" when the failure follows from the code shown, "possible" when it depends on code you can't see.`;
 
-const RULES_INSTRUCTIONS = `
-Set "failure" and "confidence" to null.`;
+const RULES_INSTRUCTIONS = `Set "failure" and "confidence" to null.`;
 
 // Bugs pass, when other files use what the diff changes.
-const USAGES_INSTRUCTIONS = `
-- "Usages in other files" shows unchanged code that uses identifiers this diff changes. Check that each usage still works with the change. A usage it breaks is a finding on the changed line responsible; name the usage (path:line) in "failure".`;
+const USAGES_INSTRUCTIONS = `- "Usages in other files" shows unchanged code that uses identifiers this diff changes. Check that each usage still works with the change. A usage it breaks is a finding on the changed line responsible; name the usage (path:line) in "failure".`;
 
 // Spelled out because models without JSON-schema support only see the prompt.
 const JSON_SHAPE = `
@@ -130,14 +129,16 @@ export const MAX_LOOKUPS = 5;
 
 const LOOKUP_INSTRUCTIONS = `You prepare the bug review of one changed file.
 List the identifiers (methods, functions, fields, constants, enum constants, types) whose signature, return value, meaning or side effects this diff changes, so a reviewer can check the code that uses them elsewhere. Also list new enum constants and new values of closed sets.
-At most ${MAX_LOOKUPS}, most important first. Bare names, e.g. "savePayment". Empty list when the diff only adds code that nothing else uses yet.
+At most ${MAX_LOOKUPS}, most important first. Bare names, e.g. "savePayment". Empty list when the diff only adds code that nothing else uses yet.`;
+
+const LOOKUP_JSON_SHAPE = `
 Respond with JSON only: {"identifiers":["savePayment"]}`;
 
 export const lookupSchema = z.object({ identifiers: z.array(z.string()) });
 
 export function lookupPrompt(file: ParsedFile, hunks: Hunk[]) {
   return {
-    instructions: LOOKUP_INSTRUCTIONS,
+    instructions: instruction(PromptKey.Lookup) + LOOKUP_JSON_SHAPE,
     prompt: section(`Diff of ${file.path} (new line numbers on the left)`, formatHunks(hunks)),
   };
 }
@@ -145,9 +146,11 @@ export function lookupPrompt(file: ParsedFile, hunks: Hunk[]) {
 // Prompt for one file chunk × one pass. Shrinks context to fit the budget:
 // whole file → windows around hunks → hunks only.
 export function unitPrompt(u: UnitInput) {
-  const pass = u.kind === PassKind.Bugs ? BUGS_INSTRUCTIONS : RULES_INSTRUCTIONS;
-  const usages = u.usages ? USAGES_INSTRUCTIONS : "";
-  const instructions = REVIEW_INSTRUCTIONS + pass + usages + JSON_SHAPE;
+  const parts = [instruction(PromptKey.Review), instruction(u.kind === PassKind.Bugs ? PromptKey.Bugs : PromptKey.Rules)];
+  if (u.usages) {
+    parts.push(instruction(PromptKey.Usages));
+  }
+  const instructions = parts.join("\n") + JSON_SHAPE;
 
   const fileLabel = u.file.change === FileChange.Renamed
     ? `${u.file.path} (renamed from ${u.file.oldPath})`
@@ -223,7 +226,8 @@ export function formatRules(categories: SnapshotCategory[]): string {
 
 // Fixed prompt cost of a unit, for chunking hunks before prompts exist.
 export function unitOverhead(description: string, summary: string, categories: SnapshotCategory[]): number {
-  return estimateTokens(REVIEW_INSTRUCTIONS + BUGS_INSTRUCTIONS + USAGES_INSTRUCTIONS + JSON_SHAPE + description + summary + formatRules(categories));
+  const fixed = [PromptKey.Review, PromptKey.Bugs, PromptKey.Usages].map(instruction).join("\n") + JSON_SHAPE;
+  return estimateTokens(fixed + description + summary + formatRules(categories));
 }
 
 export function hunkTokens(h: Hunk): number {
@@ -232,7 +236,7 @@ export function hunkTokens(h: Hunk): number {
 
 // --- project description ---------------------------------------------------
 
-export const DESCRIBE_INSTRUCTIONS = `You write a short project description that code reviewers read before reviewing changes.
+const DESCRIBE_INSTRUCTIONS = `You write a short project description that code reviewers read before reviewing changes.
 Markdown, at most 250 words, with these sections:
 **Purpose**: what the project does.
 **Stack**: languages, frameworks, key libraries.
@@ -250,7 +254,7 @@ export function describePrompt(name: string, tree: string, docs: { file: string;
 
 // --- rule changes ----------------------------------------------------------
 
-export const RULE_CHANGE_INSTRUCTIONS = `You maintain the rules of an LLM code reviewer. The user dismissed some findings, often with a reason. Propose rule changes so similar false positives stop, without losing real issues.
+const RULE_CHANGE_INSTRUCTIONS = `You maintain the rules of an LLM code reviewer. The user dismissed some findings, often with a reason. Propose rule changes so similar false positives stop, without losing real issues.
 Kinds:
 - "edit": rewrite a rule's name and description to be more precise (e.g. add an exception). Set "rule", "name" and "description".
 - "severity": change a rule's severity. Set "rule" and "severity".
@@ -280,6 +284,36 @@ export function ruleChangePrompt(rules: string, dismissed: string, chat: string)
     section("Dismissed findings", dismissed) +
     (chat ? section("User remarks from review chats", chat) : "")
   );
+}
+
+// --- editable instructions -------------------------------------------------
+
+// Setting keys of the instructions users can rewrite in Settings → Prompts.
+export enum PromptKey {
+  Overview = "prompt_overview",
+  Review = "prompt_review",
+  Bugs = "prompt_bugs",
+  Rules = "prompt_rules",
+  Lookup = "prompt_lookup",
+  Usages = "prompt_usages",
+  Describe = "prompt_describe",
+  RuleChanges = "prompt_rule_changes",
+}
+
+export const PROMPT_DEFAULTS: Record<PromptKey, string> = {
+  [PromptKey.Overview]: OVERVIEW_INSTRUCTIONS,
+  [PromptKey.Review]: REVIEW_INSTRUCTIONS,
+  [PromptKey.Bugs]: BUGS_INSTRUCTIONS,
+  [PromptKey.Rules]: RULES_INSTRUCTIONS,
+  [PromptKey.Lookup]: LOOKUP_INSTRUCTIONS,
+  [PromptKey.Usages]: USAGES_INSTRUCTIONS,
+  [PromptKey.Describe]: DESCRIBE_INSTRUCTIONS,
+  [PromptKey.RuleChanges]: RULE_CHANGE_INSTRUCTIONS,
+};
+
+// The user's version when saved, else the default. Empty = default.
+export function instruction(key: PromptKey): string {
+  return readSetting(key) || PROMPT_DEFAULTS[key];
 }
 
 function section(title: string, body: string): string {

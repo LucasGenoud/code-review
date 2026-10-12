@@ -9,7 +9,7 @@ import { attempt } from "../result";
 
 // Settings API: LLM providers, models and app-wide review settings.
 
-export type { AppSettings, SandboxSettings } from "@/server/services/settings";
+export type { AppSettings, PromptView, SandboxSettings } from "@/server/services/settings";
 export type { SandboxStatus } from "@/lib/sandbox";
 export type { Model, ModelInput, ProviderInput, ProviderView } from "@/server/services/providers";
 
@@ -74,4 +74,16 @@ export async function saveSandboxSettings(input: settings.SandboxSettings) {
 // Lists the provider's model ids; doubles as the connection test.
 export async function fetchModelNames(providerId: number) {
   return attempt(() => providers.fetchModelNames(providerId));
+}
+
+export async function listPrompts() {
+  await connection();
+  return settings.listPrompts();
+}
+
+// Empty text restores the default.
+export async function savePrompt(key: settings.PromptView["key"], text: string) {
+  const result = await attempt(() => settings.savePrompt(key, text));
+  refresh();
+  return result;
 }

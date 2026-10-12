@@ -15,7 +15,7 @@ import { categoryById, insertRules, ruleById, rulesFor, updateRule } from "@/ser
 import { InputError } from "./errors";
 import { getProject } from "./projects";
 import { resolveModel } from "./providers";
-import { RULE_CHANGE_INSTRUCTIONS, ruleChangePrompt, ruleChangeSchema } from "./review/prompts";
+import { instruction, PromptKey, ruleChangePrompt, ruleChangeSchema } from "./review/prompts";
 import { overrideRule, projectRules, type CategoryView } from "./rules";
 
 // Learning loop:
@@ -92,7 +92,7 @@ export async function generateChanges(projectId: number): Promise<number> {
 
   const reviewIds = [...new Set(dismissed.map((f) => f.reviewId))];
   const { object } = await generateObject(model.config, {
-    instructions: RULE_CHANGE_INSTRUCTIONS,
+    instructions: instruction(PromptKey.RuleChanges),
     prompt: ruleChangePrompt(formatAll(categories), dismissedText, chatRemarks(reviewIds)),
     schema: ruleChangeSchema,
   });

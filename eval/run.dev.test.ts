@@ -5,6 +5,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { DiffMode, UnitStatus } from "@/lib/domain";
+import type { PromptView } from "@/server/services/settings";
 import { buildBench } from "./build.mjs";
 import { type BenchCase, matchFindings, summarize, type Tally } from "./score";
 
@@ -16,6 +17,8 @@ import { type BenchCase, matchFindings, summarize, type Tally } from "./score";
 //   EVAL_CASES=03,21       only cases whose name starts with these
 //   EVAL_LABEL=baseline    names the result file
 //   EVAL_PARALLEL=2        reviews running at once
+//   EVAL_PROMPTS=file.json prompt variant: { "prompt_bugs": "…" }, keys as in
+//                          Settings → Prompts (PromptKey); others stay default
 //
 // Works on a copy of ./data (providers, keys, rules), so the dev database is
 // untouched. Writes eval/results/<time>-<label>.json.
@@ -60,6 +63,13 @@ describe.skipIf(!process.env.EVAL)("review eval", () => {
     const providers = await import("@/server/services/providers");
     const settings = await import("@/server/services/settings");
     const projects = await import("@/server/services/projects");
+
+    // Prompt variant, saved like a Settings edit into the copied database.
+    const variant = process.env.EVAL_PROMPTS;
+    const prompts: Record<string, string> = variant ? JSON.parse(fs.readFileSync(variant, "utf8")) : {};
+    for (const [key, text] of Object.entries(prompts)) {
+      settings.savePrompt(key as PromptView["key"], text);
+    }
     const engine = await import("@/server/services/review/engine");
     const reviews = await import("@/server/services/reviews");
     const { limiter } = await import("@/server/services/review/limiter");
@@ -125,6 +135,8 @@ describe.skipIf(!process.env.EVAL)("review eval", () => {
           label,
           model: model.name,
           app: appVersion(),
+          // Every non-default prompt in effect: the variant plus edits copied from ./data.
+          prompts: Object.fromEntries(settings.listPrompts().filter((p) => p.text !== p.defaultText).map((p) => [p.key, p.text])),
           startedAt,
           summary,
           cost,

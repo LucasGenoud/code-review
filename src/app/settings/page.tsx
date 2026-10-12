@@ -5,14 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ProviderCard } from "@/components/settings/provider-card";
 import { ProviderDialog } from "@/components/settings/provider-dialog";
+import { PromptsSection } from "@/components/settings/prompts-section";
 import { ReviewSettingsForm } from "@/components/settings/review-settings-form";
 import { SandboxSection } from "@/components/settings/sandbox-section";
-import { getSandboxStatus, getSettings, listModelOptions, listProviders } from "./actions";
+import { getSandboxStatus, getSettings, listModelOptions, listPrompts, listProviders } from "./actions";
 
 // Settings:
 //   setup steps (until a default model exists)
 //   providers ─< models
-//   review settings, code sandbox
+//   review settings, prompts, code sandbox
 export default function SettingsPage() {
   return (
     <main className="mx-auto w-full max-w-4xl px-4 py-8">
@@ -29,11 +30,12 @@ export default function SettingsPage() {
 }
 
 async function SettingsView() {
-  const [providers, settings, models, sandbox] = await Promise.all([
+  const [providers, settings, models, sandbox, prompts] = await Promise.all([
     listProviders(),
     getSettings(),
     listModelOptions(),
     getSandboxStatus(),
+    listPrompts(),
   ]);
 
   const steps = [
@@ -72,6 +74,10 @@ async function SettingsView() {
 
       <Section title="Review settings">
         <ReviewSettingsForm key={JSON.stringify(settings)} settings={settings} models={models} />
+      </Section>
+
+      <Section title="Prompts">
+        <PromptsSection prompts={prompts} />
       </Section>
 
       <Section title="Code sandbox">
