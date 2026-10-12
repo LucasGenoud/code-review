@@ -19,6 +19,15 @@ export default {
 `,
     },
     {
+      // Unchanged line; the marker only adds it as a location, since models
+      // rightly point at the check that now rejects the payment.
+      file: "src/main/java/ch/ledger/service/PaymentService.java",
+      find: String.raw`            if (invoice.status() != InvoiceStatus.SENT) {
+`,
+      replace: String.raw`            if (invoice.status() != InvoiceStatus.SENT) {  «partial-rejected»
+`,
+    },
+    {
       file: "src/main/java/ch/ledger/service/PaymentService.java",
       find: String.raw`            if (remaining == 0) {
                 invoices.setStatus(conn, invoiceId, InvoiceStatus.PAID);
