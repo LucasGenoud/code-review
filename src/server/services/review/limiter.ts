@@ -24,3 +24,21 @@ export function limiter(max: number) {
     }
   };
 }
+
+type Limit = ReturnType<typeof limiter>;
+
+const byModel = new Map<number, { max: number; run: Limit }>();
+
+// One limiter per model, shared by every running review, so the model's
+// max concurrency caps its requests, not each review's. A changed max
+// starts a fresh limiter; tasks already queued on the old one finish there.
+export function modelLimiter(modelId: number, max: number): Limit {
+  const current = byModel.get(modelId);
+  if (current && current.max === max) {
+    return current.run;
+  }
+
+  const run = limiter(max);
+  byModel.set(modelId, { max, run });
+  return run;
+}

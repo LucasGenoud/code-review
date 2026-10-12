@@ -45,7 +45,7 @@ import { resolveModel, type ResolvedModel } from "../providers";
 import { effectiveRules, splitGlobs, type RulesSnapshot } from "../rules";
 import { getSettings } from "../settings";
 import { locate } from "./locate";
-import { limiter } from "./limiter";
+import { modelLimiter } from "./limiter";
 import {
   findingsSchema,
   hunkTokens,
@@ -303,12 +303,13 @@ async function run(reviewId: number, signal: AbortSignal): Promise<void> {
     signal,
   };
 
+  // Every call of this review counts against the model's cap.
+  const limit = modelLimiter(ctx.model.model.id, ctx.model.model.maxConcurrency);
   const pending = unitsForReview(reviewId).filter((u) => u.status === UnitStatus.Pending);
   if (pending.length > 0 && !review.summary) {
-    ctx.review = { ...review, summary: await overview(ctx) };
+    ctx.review = { ...review, summary: await limit(() => overview(ctx)) };
   }
 
-  const limit = limiter(ctx.model.model.maxConcurrency);
   await Promise.all(pending.map((u) => limit(() => runUnit(ctx, u))));
 
   const touched = new Set(pending.map((u) => u.fileId));
