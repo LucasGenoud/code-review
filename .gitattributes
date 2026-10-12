@@ -1,2 +1,4 @@
 # Shell scripts run in Linux containers; CRLF breaks the shebang.
 *.sh text eol=lf
+# Bench case edits and markers match exact LF text.
+eval/bench/** text eol=lf
