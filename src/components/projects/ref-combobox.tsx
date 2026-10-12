@@ -48,7 +48,7 @@ export function RefCombobox({ id, options, value, onChange, placeholder, classNa
 
       <Combobox.Portal>
         <Combobox.Positioner sideOffset={4} align="start" className="isolate z-50">
-          <Combobox.Popup className="w-(--anchor-width) min-w-72 max-w-(--available-width) origin-(--transform-origin) overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95">
+          <Combobox.Popup className="w-(--anchor-width) min-w-lg max-w-(--available-width) origin-(--transform-origin) overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95">
             <Combobox.Empty className="px-3 py-2 text-sm text-muted-foreground empty:hidden">No matches.</Combobox.Empty>
             <Combobox.List className="max-h-[min(20rem,var(--available-height))] overflow-y-auto overscroll-contain p-1 data-empty:p-0">
               {(v: string) => <RefItem key={v} option={options.find((o) => o.value === v)!} />}
@@ -71,7 +71,7 @@ function RefItem({ option }: { option: RefOption }) {
       </Combobox.ItemIndicator>
       <span className="col-start-2 flex min-w-0 items-baseline gap-2">
         <span className="truncate">{option.label}</span>
-        {option.hint && <span className="ml-auto shrink-0 text-xs text-muted-foreground">{option.hint}</span>}
+        {option.hint && <span className="ml-auto max-w-2/5 shrink-0 truncate text-xs text-muted-foreground">{option.hint}</span>}
       </span>
     </Combobox.Item>
   );

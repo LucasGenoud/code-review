@@ -61,12 +61,16 @@ export function deleteReview(id: number): void {
 
 // --- files -----------------------------------------------------------------
 
+// Bulk inserts run one row per statement in a transaction: a single
+// multi-row insert of thousands of files or units exceeds SQLite's
+// bound-variable limit ("too many SQL variables").
+
 export function insertFiles(input: FileInput[]): ReviewFile[] {
   if (input.length === 0) {
     return [];
   }
 
-  return getDb().insert(reviewFiles).values(input).returning().all();
+  return getDb().transaction((tx) => input.map((row) => tx.insert(reviewFiles).values(row).returning().get()));
 }
 
 export function filesForReview(reviewId: number): ReviewFile[] {
@@ -97,7 +101,7 @@ export function insertUnits(input: UnitInput[]): ReviewUnit[] {
     return [];
   }
 
-  return getDb().insert(reviewUnits).values(input).returning().all();
+  return getDb().transaction((tx) => input.map((row) => tx.insert(reviewUnits).values(row).returning().get()));
 }
 
 export function unitsForReview(reviewId: number): ReviewUnit[] {

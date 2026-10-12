@@ -21,7 +21,7 @@ import { findingAnchor } from "./report-lib";
 //   ┃ [Bugs] [MAJOR] R1 · likely                 #12
 //   ┃ Title
 //   ┃ Explanation, failure scenario, suggested fix
-//   ┃ [Apply fix] [Dismiss] [Ask]
+//   ┃ [Apply fix] [Mark as fixed] [Dismiss] [Ask]
 
 const CLOSED: Record<Exclude<FindingStatus, FindingStatus.Open>, { label: string; icon: typeof Check }> = {
   [FindingStatus.Dismissed]: { label: "Dismissed", icon: CircleSlash },
@@ -59,6 +59,10 @@ function OpenFinding({ finding: f }: { finding: Finding }) {
             Apply fix
           </Button>
         )}
+        <Button size="xs" variant="ghost" onClick={() => ctx.markFixed(f.id)} disabled={pending}>
+          <Check />
+          Mark as fixed
+        </Button>
         <DismissButton finding={f} disabled={pending} />
         <Button size="xs" variant="ghost" onClick={() => ctx.ask(f)}>
           <MessageSquare />
@@ -106,7 +110,7 @@ function ClosedFinding({ finding: f }: { finding: Finding }) {
               Undo fix
             </Button>
           )}
-          {f.status === FindingStatus.Dismissed && (
+          {(f.status === FindingStatus.Dismissed || (f.status === FindingStatus.Fixed && !ctx.undoableFixes.includes(f.id))) && (
             <Button size="xs" variant="ghost" onClick={() => ctx.reopen(f.id)} disabled={pending}>
               <RotateCcw />
               Reopen

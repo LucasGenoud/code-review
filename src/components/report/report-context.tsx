@@ -23,6 +23,7 @@ type ReportState = {
   undo: (id: number) => void;
   undoableFixes: number[];
   dismiss: (id: number, reason: string) => void;
+  markFixed: (id: number) => void;
   reopen: (id: number) => void;
   ask: (finding: Finding) => void;
   // Sandbox runner usable: bug findings can be verified by running code.

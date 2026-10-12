@@ -147,6 +147,12 @@ export function dismissFinding(id: number, reason: string): void {
   updateFinding(id, { status: FindingStatus.Dismissed, dismissReason: text || null });
 }
 
+// Fixed by hand, e.g. the user edited the code. No file write, no undo.
+export function markFixed(id: number): void {
+  requireFinding(id);
+  updateFinding(id, { status: FindingStatus.Fixed, dismissReason: null });
+}
+
 export function reopenFinding(id: number): void {
   requireFinding(id);
   updateFinding(id, { status: FindingStatus.Open, dismissReason: null });

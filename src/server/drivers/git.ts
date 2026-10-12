@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { FileChange } from "@/lib/domain";
 
 const exec = promisify(execFile);
 
@@ -9,7 +10,17 @@ const MAX_BUFFER = 256 * 1024 * 1024;
 
 // fileMode off: Windows bind mounts report every file as chmod-changed.
 // quotepath off: keep non-ASCII paths readable instead of octal-escaped.
-const BASE_ARGS = ["-c", "core.fileMode=false", "-c", "core.quotepath=off"];
+// autocrlf input: Windows checkouts hold CRLF; without the host's autocrlf
+//   every line of every file reads as changed, e.g. a whole-repo diff.
+// checkStat minimal, trustctime off: bind mounts report other inodes and
+//   ctimes than the host index holds, forcing git to re-read every file.
+const BASE_ARGS = [
+  "-c", "core.fileMode=false",
+  "-c", "core.quotepath=off",
+  "-c", "core.autocrlf=input",
+  "-c", "core.checkStat=minimal",
+  "-c", "core.trustctime=false",
+];
 
 // git's well-known empty tree: diff base for a repo's first commit.
 export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -86,11 +97,13 @@ export async function currentBranch(dir: string): Promise<string | null> {
 
 export type CommitInfo = { sha: string; short: string; subject: string; author: string; date: string };
 
-export async function commits(dir: string, limit: number): Promise<CommitInfo[]> {
+// Recent commits reachable from `ref`, or from every ref when null.
+export async function commits(dir: string, limit: number, ref: string | null): Promise<CommitInfo[]> {
   const format = ["%H", "%h", "%s", "%an", "%cI"].join(FIELD_SEP);
+  const from = ref ? ["--end-of-options", ref] : ["--all"];
   let out: string;
   try {
-    out = await git(dir, ["log", "--all", `-n${limit}`, `--format=${format}`]);
+    out = await git(dir, ["log", `-n${limit}`, `--format=${format}`, ...from]);
   } catch {
     // Repo without commits.
     return [];
@@ -128,6 +141,41 @@ export async function diff(dir: string, base: string, head: string | null): Prom
 export async function untrackedFiles(dir: string): Promise<string[]> {
   const out = await git(dir, ["ls-files", "--others", "--exclude-standard", "-z"]);
   return out.split("\0").filter(Boolean);
+}
+
+export type ChangedFile = { path: string; change: FileChange };
+
+// Porcelain status letter → change. Anything else (M, T, U) is a modification.
+const STATUS_CHANGE: Record<string, FileChange> = {
+  "?": FileChange.Added,
+  A: FileChange.Added,
+  D: FileChange.Deleted,
+  R: FileChange.Renamed,
+  C: FileChange.Added,
+};
+
+const STATUS_PATH_START = 3;
+
+// Working tree and index changes against HEAD, untracked files included.
+// One `git status`: cheaper than diffing contents.
+//   "R  new\0old\0" ← renames and copies carry their source as an extra entry
+export async function changedFiles(dir: string): Promise<ChangedFile[]> {
+  const out = await git(dir, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  const entries = out.split("\0").filter(Boolean);
+  const files: ChangedFile[] = [];
+
+  for (let i = 0; i < entries.length; i++) {
+    // "XY path": X = index, Y = working tree.
+    const entry = entries[i];
+    const letter = entry[0] === " " ? entry[1] : entry[0];
+    files.push({ path: entry.slice(STATUS_PATH_START), change: STATUS_CHANGE[letter] ?? FileChange.Modified });
+
+    if (letter === "R" || letter === "C") {
+      i++;
+    }
+  }
+
+  return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 export async function trackedFiles(dir: string): Promise<string[]> {

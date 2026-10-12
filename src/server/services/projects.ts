@@ -1,7 +1,16 @@
 import path from "node:path";
 import { z } from "zod";
 import { readBytes } from "@/server/drivers/fs";
-import { branches, commits, currentBranch, repoRoot, trackedFiles, type CommitInfo } from "@/server/drivers/git";
+import {
+  branches,
+  changedFiles,
+  commits,
+  currentBranch,
+  repoRoot,
+  trackedFiles,
+  type ChangedFile,
+  type CommitInfo,
+} from "@/server/drivers/git";
 import { generatePlain } from "@/server/drivers/llm";
 import {
   allProjects,
@@ -18,9 +27,10 @@ import { resolveModel } from "./providers";
 import { describePrompt, DESCRIBE_INSTRUCTIONS } from "./review/prompts";
 import { languageUsage, type LanguageUsage } from "./rules";
 
-export type { CommitInfo, LanguageUsage, Project };
+export type { ChangedFile, CommitInfo, LanguageUsage, Project };
 
-export type ProjectRefs = { branches: string[]; current: string | null; commits: CommitInfo[] };
+// changes: uncommitted files, shown before reviewing local changes.
+export type ProjectRefs = { branches: string[]; current: string | null; commits: CommitInfo[]; changes: ChangedFile[] };
 
 const RECENT_COMMITS = 50;
 
@@ -106,12 +116,24 @@ export function saveProjectSettings(id: number, input: ProjectSettings): void {
 
 export async function projectRefs(id: number): Promise<ProjectRefs> {
   const p = getProject(id);
-  const [list, current, recent] = await Promise.all([
+  const [list, current, recent, changes] = await Promise.all([
     branches(p.path),
     currentBranch(p.path),
-    commits(p.path, RECENT_COMMITS),
+    commits(p.path, RECENT_COMMITS, null),
+    changedFiles(p.path),
   ]);
-  return { branches: list, current, commits: recent };
+  return { branches: list, current, commits: recent, changes };
+}
+
+// Recent commits on one branch, or on all branches when null.
+export async function projectCommits(id: number, branch: string | null): Promise<CommitInfo[]> {
+  const p = getProject(id);
+  // Only known branches reach git, e.g. never "--output=x".
+  if (branch !== null && !(await branches(p.path)).includes(branch)) {
+    throw new InputError(`Unknown branch: ${branch}`);
+  }
+
+  return commits(p.path, RECENT_COMMITS, branch);
 }
 
 // Language packs and how many tracked files each covers in this project.

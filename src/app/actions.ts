@@ -14,7 +14,7 @@ import { attempt } from "./result";
 
 export type { Listing };
 export type { Result } from "./result";
-export type { CommitInfo, LanguageUsage, Project, ProjectRefs, ProjectSettings } from "@/server/services/projects";
+export type { ChangedFile, CommitInfo, LanguageUsage, Project, ProjectRefs, ProjectSettings } from "@/server/services/projects";
 export type { ReviewSummary } from "@/server/services/reviews";
 export type { DiffSource };
 
@@ -31,6 +31,11 @@ export async function getProject(id: number) {
 export async function projectRefs(id: number) {
   await connection();
   return projects.projectRefs(id);
+}
+
+// Commits for the commit pickers: one branch, or all branches when null.
+export async function listCommits(id: number, branch: string | null) {
+  return attempt(() => projects.projectCommits(id, branch));
 }
 
 export async function projectLanguages(id: number) {

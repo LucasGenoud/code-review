@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import {
   applyFix,
   dismissFinding,
+  markFixed as markFindingFixed,
   refreshReview,
   reopenFinding,
   undoFix,
@@ -25,6 +26,7 @@ import { FileList } from "./file-list";
 import { FindingsPanel } from "./findings-panel";
 import { ReportContext } from "./report-context";
 import { ReportHeader } from "./report-header";
+import { Grow, ResizeHandle } from "./resize-handle";
 import { DEFAULT_FILTERS, findingAnchor, listAnchor, matchesScope, matchesStatus, sortFindings } from "./report-lib";
 import { ShortcutsDialog } from "./shortcuts-dialog";
 
@@ -40,6 +42,11 @@ const POLL_MS = 1500;
 const FLASH_MS = 1600;
 // Sheet exit transition is 200 ms.
 const SHEET_CLOSE_MS = 250;
+// Smooth scroll plus lazy diff mounting near the target.
+const SCROLL_SETTLE_MS = 1200;
+// Side panel widths in px; the edges between columns drag to resize.
+const FILES_WIDTH = { initial: 260, min: 160, max: 600 };
+const FINDINGS_WIDTH = { initial: 380, min: 280, max: 720 };
 
 enum Step {
   Next = 1,
@@ -72,6 +79,7 @@ export function ReportView({ report, chat, canVerify }: Props) {
   const [busy, markBusy] = useOptimistic<number[], number>([], (state, id) => [...state, id]);
   const [, startTransition] = useTransition();
   const [refreshing, startRefresh] = useTransition();
+  const [polling, startPoll] = useTransition();
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -80,6 +88,8 @@ export function ReportView({ report, chat, canVerify }: Props) {
   const [chatOpen, setChatOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [filesWidth, setFilesWidth] = useState(FILES_WIDTH.initial);
+  const [findingsWidth, setFindingsWidth] = useState(FINDINGS_WIDTH.initial);
   const chatRef = useRef<ChatHandle>(null);
 
   // Diff shows every status (closed ones collapsed); the panel filters status.
@@ -91,14 +101,16 @@ export function ReportView({ report, chat, canVerify }: Props) {
   const openCount = findings.filter((f) => f.status === FindingStatus.Open).length;
 
   // Poll server data while the review runs: findings appear progressively.
+  // Next poll waits for the last: large reports take longer than POLL_MS to
+  // load, and a fixed interval would abort each refresh before it lands.
   useEffect(() => {
-    if (!running) {
+    if (!running || polling) {
       return;
     }
 
-    const timer = setInterval(() => router.refresh(), POLL_MS);
-    return () => clearInterval(timer);
-  }, [running, router]);
+    const timer = setTimeout(() => startPoll(() => router.refresh()), POLL_MS);
+    return () => clearTimeout(timer);
+  }, [running, polling, router]);
 
   // End the highlight pulse.
   useEffect(() => {
@@ -142,6 +154,10 @@ export function ReportView({ report, chat, canVerify }: Props) {
     mutate({ id, status: FindingStatus.Dismissed, dismissReason: reason.trim() || null }, () => dismissFinding(id, reason));
   }
 
+  function markFixed(id: number) {
+    mutate({ id, status: FindingStatus.Fixed, dismissReason: null }, () => markFindingFixed(id));
+  }
+
   function reopen(id: number) {
     mutate({ id, status: FindingStatus.Open, dismissReason: null }, () => reopenFinding(id));
   }
@@ -171,6 +187,16 @@ export function ReportView({ report, chat, canVerify }: Props) {
       document.getElementById(findingAnchor(id))?.scrollIntoView({ behavior: "smooth", block: "center" });
       document.getElementById(listAnchor(id))?.scrollIntoView({ block: "nearest" });
     }, delay);
+
+    // Diffs mounting around the card replace placeholder heights and can push
+    // it off screen; re-center once they settle.
+    setTimeout(() => {
+      const card = document.getElementById(findingAnchor(id));
+      const rect = card?.getBoundingClientRect();
+      if (rect && (rect.top < 0 || rect.bottom > window.innerHeight)) {
+        card?.scrollIntoView({ block: "center" });
+      }
+    }, delay + SCROLL_SETTLE_MS);
   }
 
   function ask(f: Finding) {
@@ -254,6 +280,7 @@ export function ReportView({ report, chat, canVerify }: Props) {
         undo,
         undoableFixes: report.undoableFixes,
         dismiss,
+        markFixed,
         reopen,
         ask,
         canVerify,
@@ -272,7 +299,31 @@ export function ReportView({ report, chat, canVerify }: Props) {
           openCount={openCount}
         />
 
-        <div className="grid min-h-0 flex-1 lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(0,1fr)_380px]">
+        <div
+          className="relative grid min-h-0 flex-1 lg:grid-cols-[var(--files-w)_minmax(0,1fr)] xl:grid-cols-[var(--files-w)_minmax(0,1fr)_var(--findings-w)]"
+          style={{ "--files-w": `${filesWidth}px`, "--findings-w": `${findingsWidth}px` } as React.CSSProperties}
+        >
+          <ResizeHandle
+            label="Resize file list"
+            width={filesWidth}
+            min={FILES_WIDTH.min}
+            max={FILES_WIDTH.max}
+            grow={Grow.Right}
+            onWidth={setFilesWidth}
+            className="hidden lg:block"
+            style={{ left: "var(--files-w)" }}
+          />
+          <ResizeHandle
+            label="Resize findings panel"
+            width={findingsWidth}
+            min={FINDINGS_WIDTH.min}
+            max={FINDINGS_WIDTH.max}
+            grow={Grow.Left}
+            onWidth={setFindingsWidth}
+            className="hidden xl:block"
+            style={{ left: "calc(100% - var(--findings-w))" }}
+          />
+
           <aside className="hidden min-h-0 overflow-y-auto border-r bg-sidebar lg:block">
             <FileList files={report.files} units={report.units} findings={findings} categories={categories} />
           </aside>

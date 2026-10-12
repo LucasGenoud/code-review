@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DiffModeEnum, DiffView, getLang } from "@git-diff-view/react";
 import "@git-diff-view/react/styles/diff-view-pure.css";
 import "./diff.css";
@@ -19,6 +19,12 @@ import { fileAnchor, isInDiff, lineStats, newLineRanges, sortFindings, splitPath
 // line they end on. Findings outside the shown hunks are listed on top.
 
 const DIFF_FONT_SIZE = 13;
+// Placeholder height until the diff mounts, measured from rendered diffs.
+// Close estimates keep jumps to a finding from drifting as neighbors mount.
+const LINE_HEIGHT_PX = 21;
+const CARD_HEIGHT_PX = 175;
+// Mount diffs this far ahead of the viewport so scrolling stays smooth.
+const PRELOAD_MARGIN = "1500px";
 
 type Theme = "light" | "dark";
 
@@ -112,7 +118,9 @@ type BodyProps = {
 };
 
 function FileBody({ file, extend, findings, theme }: BodyProps) {
+  const { selectedId } = useReport();
   const [reveal, setReveal] = useState(false);
+  const [ref, near] = useNearViewport();
   const byId = new Map(findings.map((f) => [f.id, f]));
   const skipped = file.state === FileState.Skipped;
 
@@ -131,6 +139,12 @@ function FileBody({ file, extend, findings, theme }: BodyProps) {
         </Button>
       </Note>
     );
+  }
+
+  // Selecting a finding mounts its diff so the jump finds the card.
+  if (!near && !findings.some((f) => f.id === selectedId)) {
+    const rows = file.patch.slice(file.patch.indexOf("\n@@")).split("\n").length;
+    return <div ref={ref} style={{ height: rows * LINE_HEIGHT_PX + findings.length * CARD_HEIGHT_PX }} />;
   }
 
   const lang = getLang(file.path);
@@ -155,6 +169,26 @@ function FileBody({ file, extend, findings, theme }: BodyProps) {
       />
     </div>
   );
+}
+
+// Diffs are heavy to render: thousands at once freeze the tab. True once
+// the element came near the viewport; stays true.
+function useNearViewport(): [React.RefObject<HTMLDivElement | null>, boolean] {
+  const ref = useRef<HTMLDivElement>(null);
+  const [near, setNear] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || near) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(([entry]) => entry.isIntersecting && setNear(true), { rootMargin: PRELOAD_MARGIN });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [near]);
+
+  return [ref, near];
 }
 
 function Note({ children }: { children: React.ReactNode }) {

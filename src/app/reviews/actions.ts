@@ -65,6 +65,12 @@ export async function dismissFinding(id: number, reason: string) {
   return result;
 }
 
+export async function markFixed(id: number) {
+  const result = await attempt(() => reviews.markFixed(id));
+  refresh();
+  return result;
+}
+
 export async function reopenFinding(id: number) {
   const result = await attempt(() => reviews.reopenFinding(id));
   refresh();
