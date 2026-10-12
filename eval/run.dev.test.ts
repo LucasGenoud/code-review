@@ -16,7 +16,9 @@ import { type BenchCase, matchFindings, summarize, type Tally } from "./score";
 //   EVAL_MODEL=<name>      model to use; default: the app's default model
 //   EVAL_CASES=03,21       only cases whose name starts with these
 //   EVAL_LABEL=baseline    names the result file
-//   EVAL_PARALLEL=2        reviews running at once
+//   EVAL_PARALLEL=4        reviews running at once
+//   EVAL_CONCURRENCY=5     max LLM requests at once (sets every model's
+//                          max concurrency in the copy). One eval at a time!
 //   EVAL_PROMPTS=file.json prompt variant: { "prompt_bugs": "…" }, keys as in
 //                          Settings → Prompts (PromptKey); others stay default
 //
@@ -29,18 +31,25 @@ const SECRET_FILE = "secret.key";
 const RESULTS = path.resolve("eval", "results");
 const POLL_MS = 1000;
 const TIMEOUT_MS = 4 * 60 * 60 * 1000;
-const DEFAULT_PARALLEL = 2;
+const DEFAULT_PARALLEL = 4;
+// Shared LLM servers time out and cool down beyond a few parallel requests.
+const DEFAULT_CONCURRENCY = 5;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const pct = (t: Tally) => `${t.hit}/${t.total} (${t.total ? Math.round((100 * t.hit) / t.total) : 0}%)`;
 
-// Online backup: safe while the dev server holds the database open.
-async function copyDevData(dest: string) {
+// Online backup: safe while the dev server holds the database open. The
+// copy caps every model's concurrency, which the engine shares across reviews.
+async function copyDevData(dest: string, concurrency: number) {
   fs.mkdirSync(dest, { recursive: true });
   const source = new Database(path.join(DEV_DATA, DB_FILE), { readonly: true });
   await source.backup(path.join(dest, DB_FILE));
   source.close();
   fs.copyFileSync(path.join(DEV_DATA, SECRET_FILE), path.join(dest, SECRET_FILE));
+
+  const copy = new Database(path.join(dest, DB_FILE));
+  copy.prepare("UPDATE models SET max_concurrency = ?").run(concurrency);
+  copy.close();
 }
 
 function appVersion(): string {
@@ -52,7 +61,7 @@ function appVersion(): string {
 describe.skipIf(!process.env.EVAL)("review eval", () => {
   it("scores the bench", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prr-eval-"));
-    await copyDevData(path.join(tmp, "data"));
+    await copyDevData(path.join(tmp, "data"), Number(process.env.EVAL_CONCURRENCY ?? DEFAULT_CONCURRENCY));
     process.env.DATA_DIR = path.join(tmp, "data");
     process.env.REPO_ROOT = tmp;
 
