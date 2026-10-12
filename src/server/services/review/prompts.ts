@@ -79,6 +79,10 @@ This pass is about bugs only: defects that make the code behave incorrectly.
 const RULES_INSTRUCTIONS = `
 Set "failure" and "confidence" to null.`;
 
+// Bugs pass, when other files use what the diff changes.
+const USAGES_INSTRUCTIONS = `
+- "Usages in other files" shows unchanged code that uses identifiers this diff changes. Check that each usage still works with the change. A usage it breaks is a finding on the changed line responsible; name the usage (path:line) in "failure".`;
+
 // Spelled out because models without JSON-schema support only see the prompt.
 const JSON_SHAPE = `
 Respond with JSON only:
@@ -113,13 +117,37 @@ type UnitInput = {
   // New version of the file; null when unavailable.
   content: string | null;
   budget: number;
+  // grep output from lookupPrompt's identifiers; "" when none.
+  usages: string;
 };
+
+// --- usage lookup ----------------------------------------------------------
+
+// Before the bugs pass: the model names what the diff changes, the engine
+// greps for its usages in other files.
+//   diff: "- return total - paid;" → ["balance"] → "Pay.java:44: long r = balance(…)"
+export const MAX_LOOKUPS = 5;
+
+const LOOKUP_INSTRUCTIONS = `You prepare the bug review of one changed file.
+List the identifiers (methods, functions, fields, constants, enum constants, types) whose signature, return value, meaning or side effects this diff changes, so a reviewer can check the code that uses them elsewhere. Also list new enum constants and new values of closed sets.
+At most ${MAX_LOOKUPS}, most important first. Bare names, e.g. "savePayment". Empty list when the diff only adds code that nothing else uses yet.
+Respond with JSON only: {"identifiers":["savePayment"]}`;
+
+export const lookupSchema = z.object({ identifiers: z.array(z.string()) });
+
+export function lookupPrompt(file: ParsedFile, hunks: Hunk[]) {
+  return {
+    instructions: LOOKUP_INSTRUCTIONS,
+    prompt: section(`Diff of ${file.path} (new line numbers on the left)`, formatHunks(hunks)),
+  };
+}
 
 // Prompt for one file chunk × one pass. Shrinks context to fit the budget:
 // whole file → windows around hunks → hunks only.
 export function unitPrompt(u: UnitInput) {
-  const instructions =
-    REVIEW_INSTRUCTIONS + (u.kind === PassKind.Bugs ? BUGS_INSTRUCTIONS : RULES_INSTRUCTIONS) + JSON_SHAPE;
+  const pass = u.kind === PassKind.Bugs ? BUGS_INSTRUCTIONS : RULES_INSTRUCTIONS;
+  const usages = u.usages ? USAGES_INSTRUCTIONS : "";
+  const instructions = REVIEW_INSTRUCTIONS + pass + usages + JSON_SHAPE;
 
   const fileLabel = u.file.change === FileChange.Renamed
     ? `${u.file.path} (renamed from ${u.file.oldPath})`
@@ -129,7 +157,8 @@ export function unitPrompt(u: UnitInput) {
     section("Project", u.description || "(no description)") +
     section("Change overview", u.summary || "(none)") +
     section("Rules", formatRules(u.categories)) +
-    section(`Diff of ${fileLabel} (new line numbers on the left)`, formatHunks(u.hunks));
+    section(`Diff of ${fileLabel} (new line numbers on the left)`, formatHunks(u.hunks)) +
+    (u.usages ? section("Usages in other files (path:line: match, path-line- context)", u.usages) : "");
 
   const room = u.budget - estimateTokens(instructions + core);
   const context = pickContext(u.content, u.hunks, room);
@@ -194,7 +223,7 @@ export function formatRules(categories: SnapshotCategory[]): string {
 
 // Fixed prompt cost of a unit, for chunking hunks before prompts exist.
 export function unitOverhead(description: string, summary: string, categories: SnapshotCategory[]): number {
-  return estimateTokens(REVIEW_INSTRUCTIONS + BUGS_INSTRUCTIONS + JSON_SHAPE + description + summary + formatRules(categories));
+  return estimateTokens(REVIEW_INSTRUCTIONS + BUGS_INSTRUCTIONS + USAGES_INSTRUCTIONS + JSON_SHAPE + description + summary + formatRules(categories));
 }
 
 export function hunkTokens(h: Hunk): number {

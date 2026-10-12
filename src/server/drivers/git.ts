@@ -202,6 +202,24 @@ export async function grep(dir: string, pattern: string, glob?: string): Promise
   return git(dir, args, ExitPolicy.AllowNoMatch);
 }
 
+// Lines mentioning `word` as a whole word at commit `sha`, or in the working
+// tree (untracked files included) when null. Returns "path:line:text" lines,
+// with `context` surrounding lines as "path-line-text" and "--" between groups.
+export async function wordUsages(dir: string, word: string, sha: string | null, context: number): Promise<string> {
+  const where = sha ? [sha] : ["--untracked"];
+  const args = ["grep", "-n", "-I", "-w", "-F", `-C${context}`, "-e", word, ...where];
+  const out = await git(dir, args, ExitPolicy.AllowNoMatch);
+  if (!sha) {
+    return out;
+  }
+
+  // Searching a commit prefixes each line with "<sha>:".
+  return out
+    .split("\n")
+    .map((l) => (l.startsWith(`${sha}:`) ? l.slice(sha.length + 1) : l))
+    .join("\n");
+}
+
 export async function log(dir: string, file: string | undefined, limit: number): Promise<string> {
   const args = ["log", `-n${limit}`, "--format=%h %ad %an: %s", "--date=short"];
   if (file) {

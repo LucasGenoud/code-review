@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import { FileChange } from "@/lib/domain";
-import { changedFiles, diff } from "./git";
+import { changedFiles, diff, wordUsages } from "./git";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prr-git-"));
 let nextRepo = 0;
@@ -56,4 +56,16 @@ it("lists modified, added, deleted, renamed and untracked files", async () => {
     { path: "mod.ts", change: FileChange.Modified },
     { path: "new name.ts", change: FileChange.Renamed },
   ]);
+});
+
+it("finds whole-word usages at a commit or in the working tree", async () => {
+  const repo = repoWith({ "Pay.java": "long r = balance(inv);\nlong balanced = 0;\n" });
+  const sha = git(repo, "rev-parse", "HEAD").trim();
+  fs.writeFileSync(path.join(repo, "New.java"), "balance(x);\n");
+
+  // The commit doesn't see untracked files and drops git's "<sha>:" prefix.
+  expect(await wordUsages(repo, "balance", sha, 0)).toBe("Pay.java:1:long r = balance(inv);\n");
+  expect(await wordUsages(repo, "balance", sha, 1)).toBe("Pay.java:1:long r = balance(inv);\nPay.java-2-long balanced = 0;\n");
+  expect(await wordUsages(repo, "balance", null, 0)).toContain("New.java:1:balance(x);");
+  expect(await wordUsages(repo, "missing", sha, 0)).toBe("");
 });

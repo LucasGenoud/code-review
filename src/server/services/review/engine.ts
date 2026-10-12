@@ -10,7 +10,8 @@ import {
   SEVERITY_RANK,
   UnitStatus,
 } from "@/lib/domain";
-import { generateObject, generatePlain } from "@/server/drivers/llm";
+import { wordUsages } from "@/server/drivers/git";
+import { generateObject, generatePlain, type Usage } from "@/server/drivers/llm";
 import { undoableFixes } from "@/server/drivers/fixStore";
 import { projectById } from "@/server/drivers/projectStore";
 import {
@@ -38,7 +39,7 @@ import {
 } from "@/server/drivers/reviewStore";
 import type { Finding, Project, Review, ReviewFile, ReviewUnit } from "@/server/drivers/schema";
 import { headContent, loadDiff, resolveSource, type DiffSource, type Resolved } from "../diff";
-import { parseDiff, type ParsedFile } from "../diffParse";
+import { parseDiff, type Hunk, type ParsedFile } from "../diffParse";
 import { InputError } from "../errors";
 import { resolveModel, type ResolvedModel } from "../providers";
 import { effectiveRules, splitGlobs, type RulesSnapshot } from "../rules";
@@ -48,6 +49,9 @@ import { limiter } from "./limiter";
 import {
   findingsSchema,
   hunkTokens,
+  lookupPrompt,
+  lookupSchema,
+  MAX_LOOKUPS,
   overviewPrompt,
   PassKind,
   unitOverhead,
@@ -75,6 +79,12 @@ const OVERVIEW_BUDGET = 6000;
 const SUMMARY_RESERVE = 400;
 const MAX_ERROR_LENGTH = 500;
 const RULE_KEY = /^R?(\d+)$/i;
+// Lines around each usage, so the reviewer sees what the caller does with it.
+const USAGE_CONTEXT_LINES = 3;
+// Per identifier, so a widely used name can't flood the prompt.
+const MAX_USAGE_LINES = 60;
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+const NO_USAGE: Usage = { input: 0, output: 0 };
 
 const controllers = new Map<number, AbortController>();
 
@@ -365,6 +375,9 @@ async function runUnit(ctx: RunContext, unit: ReviewUnit): Promise<void> {
     const kind = categories.some((c) => c.kind === CategoryKind.Bugs) ? PassKind.Bugs : PassKind.Rules;
     const content = await headContent(ctx.project.path, ctx.review.headSha, file.path);
 
+    // Bugs pass also sees how other files use what this diff changes.
+    const lookup = kind === PassKind.Bugs ? await lookupUsages(ctx, parsed, hunks) : { usages: "", usage: NO_USAGE };
+
     const { instructions, prompt } = unitPrompt({
       kind,
       description: ctx.project.description,
@@ -374,15 +387,17 @@ async function runUnit(ctx: RunContext, unit: ReviewUnit): Promise<void> {
       hunks,
       content,
       budget: Math.floor(ctx.model.model.contextWindow * PROMPT_SHARE),
+      usages: lookup.usages,
     });
     updateUnit(unit.id, { prompt: `${instructions}\n\n---\n\n${prompt}` });
 
-    const { object, usage } = await generateObject(ctx.model.config, {
+    const { object, usage: spent } = await generateObject(ctx.model.config, {
       instructions,
       prompt,
       schema: findingsSchema,
       signal: ctx.signal,
     });
+    const usage = { input: spent.input + lookup.usage.input, output: spent.output + lookup.usage.output };
 
     const dismissed = findingsForFile(file.id).filter((f) => f.status === FindingStatus.Dismissed);
     insertFindings(toFindings(object.findings, { kind, categories, file, unit, content, dismissed }));
@@ -396,6 +411,51 @@ async function runUnit(ctx: RunContext, unit: ReviewUnit): Promise<void> {
     }
 
     updateUnit(unit.id, { status: UnitStatus.Failed, error: errorText(e) });
+  }
+}
+
+// Asks which identifiers the diff changes, then greps their usages in other
+// files. e.g. balance() flips sign → PaymentService's `cents > remaining`.
+async function lookupUsages(ctx: RunContext, file: ParsedFile, hunks: Hunk[]): Promise<{ usages: string; usage: Usage }> {
+  try {
+    const { instructions, prompt } = lookupPrompt(file, hunks);
+    const { object, usage } = await generateObject(ctx.model.config, {
+      instructions,
+      prompt,
+      schema: lookupSchema,
+      signal: ctx.signal,
+    });
+
+    const names = [...new Set(object.identifiers.map((n) => n.trim()))]
+      .filter((n) => IDENTIFIER.test(n))
+      .slice(0, MAX_LOOKUPS);
+
+    const blocks: string[] = [];
+    for (const name of names) {
+      const out = await wordUsages(ctx.project.path, name, ctx.review.headSha, USAGE_CONTEXT_LINES);
+
+      // Groups ("--" separated) in this file are in the prompt already.
+      const groups = out
+        .trimEnd()
+        .split("\n--\n")
+        .filter((g) => g && !g.startsWith(`${file.path}:`) && !g.startsWith(`${file.path}-`));
+      if (groups.length === 0) {
+        continue;
+      }
+
+      const lines = groups.join("\n--\n").split("\n").slice(0, MAX_USAGE_LINES);
+      blocks.push(`### ${name}\n${lines.join("\n")}`);
+    }
+
+    return { usages: blocks.join("\n\n"), usage };
+  } catch (e) {
+    if (ctx.signal.aborted) {
+      throw e;
+    }
+
+    // The unit still works without usages, just blind to other files.
+    console.error(`Review ${ctx.review.id}: usage lookup for ${file.path} failed`, e);
+    return { usages: "", usage: NO_USAGE };
   }
 }
 

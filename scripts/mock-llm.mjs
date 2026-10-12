@@ -109,6 +109,11 @@ function completion(body) {
     return JSON.stringify(ruleChanges(prompt));
   }
 
+  // Usage lookup before the bugs pass: nothing to look up.
+  if (/"identifiers"/.test(system)) {
+    return JSON.stringify({ identifiers: [] });
+  }
+
   if (wantsJson) {
     return JSON.stringify(findings(system, prompt));
   }

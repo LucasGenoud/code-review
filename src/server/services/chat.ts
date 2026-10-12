@@ -5,7 +5,7 @@ import { z } from "zod";
 import { FindingStatus, ruleKey } from "@/lib/domain";
 import type { SandboxLanguage } from "@/lib/sandbox";
 import { loadMessages, saveMessages } from "@/server/drivers/chatStore";
-import { grep, log, trackedFiles } from "@/server/drivers/git";
+import { grep, log, trackedFiles, wordUsages } from "@/server/drivers/git";
 import { defineTool, streamChat, type ChatTool } from "@/server/drivers/llm";
 import { projectById } from "@/server/drivers/projectStore";
 import { addReviewTokens, findingsForReview, reviewById } from "@/server/drivers/reviewStore";
@@ -113,6 +113,15 @@ function tools(project: Project, review: Review): Record<string, ChatTool> {
       run: async ({ pattern, glob }) => {
         const out = await grep(project.path, pattern, glob ?? undefined);
         return capLines(out) || "(no matches)";
+      },
+    }),
+    find_usages: defineTool({
+      description:
+        "Find every line of the reviewed version that mentions an identifier (whole word), e.g. who calls a method. Returns path:line:text.",
+      input: z.object({ identifier: z.string().min(1).describe("e.g. savePayment") }),
+      run: async ({ identifier }) => {
+        const out = await wordUsages(project.path, identifier, review.headSha, 0);
+        return capLines(out) || "(no usages)";
       },
     }),
     list_files: defineTool({
