@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import picomatch from "picomatch";
+import { z } from "zod";
 import {
   CategoryKind,
   FileChange,
@@ -91,7 +92,9 @@ export function isRunning(reviewId: number): boolean {
 
 // --- start -----------------------------------------------------------------
 
-export async function startReview(projectId: number, source: DiffSource): Promise<number> {
+// ruleIds: exactly these rules (from a rule set or picked for this review);
+// null = the project's enabled rules.
+export async function startReview(projectId: number, source: DiffSource, ruleIds: number[] | null): Promise<number> {
   const project = projectById(projectId);
   if (!project) {
     throw new InputError("Unknown project");
@@ -104,9 +107,10 @@ export async function startReview(projectId: number, source: DiffSource): Promis
     throw new InputError("No changes to review");
   }
 
-  const snapshot = effectiveRules(projectId);
+  const only = z.array(z.number().int()).nullable().parse(ruleIds);
+  const snapshot = effectiveRules(projectId, only && new Set(only));
   if (snapshot.categories.length === 0) {
-    throw new InputError("No enabled rules for this project");
+    throw new InputError(only ? "None of the chosen rules apply to this project" : "No enabled rules for this project");
   }
 
   const review = insertReview({

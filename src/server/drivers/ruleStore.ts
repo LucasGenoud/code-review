@@ -59,6 +59,11 @@ export function rulesFor(projectId: number | null): Rule[] {
     .all();
 }
 
+// Ids of every rule, global or project-only.
+export function allRuleIds(): Set<number> {
+  return new Set(getDb().select({ id: rules.id }).from(rules).all().map((r) => r.id));
+}
+
 export function ruleById(id: number): Rule | undefined {
   return getDb().select().from(rules).where(eq(rules.id, id)).get();
 }

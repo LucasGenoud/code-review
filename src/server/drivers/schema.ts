@@ -68,6 +68,8 @@ export const projects = sqliteTable("projects", {
   // Newline-separated globs, added to the global ignore list.
   ignoreGlobs: text("ignore_globs").notNull().default(""),
   modelId: integer("model_id").references(() => models.id, { onDelete: "set null" }),
+  // Default rules for new reviews. Null = the project's enabled rules.
+  ruleSetId: integer("rule_set_id").references(() => ruleSets.id, { onDelete: "set null" }),
   createdAt: createdAt(),
 });
 
@@ -270,6 +272,15 @@ export const ruleChanges = sqliteTable("rule_changes", {
   createdAt: createdAt(),
 });
 
+// Named subset of rules to review with instead of the project's enabled rules.
+export const ruleSets = sqliteTable("rule_sets", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  // JSON number[]: rule ids. Deleted rules are skipped when used.
+  ruleIds: text("rule_ids").notNull(),
+  createdAt: createdAt(),
+});
+
 export type Provider = typeof providers.$inferSelect;
 export type Model = typeof models.$inferSelect;
 export type Project = typeof projects.$inferSelect;
@@ -282,3 +293,4 @@ export type ReviewFile = typeof reviewFiles.$inferSelect;
 export type ReviewUnit = typeof reviewUnits.$inferSelect;
 export type Finding = typeof findings.$inferSelect;
 export type RuleChange = typeof ruleChanges.$inferSelect;
+export type RuleSet = typeof ruleSets.$inferSelect;

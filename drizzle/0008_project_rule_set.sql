@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `rule_set_id` integer REFERENCES rule_sets(id) ON DELETE set null;

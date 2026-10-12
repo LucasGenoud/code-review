@@ -136,9 +136,10 @@ export function projectRules(projectId: number): CategoryView[] {
 }
 
 // Enabled categories and rules for a project, overrides applied.
-export function effectiveRules(projectId: number): RulesSnapshot {
+// `only` = a rule set: exactly those rules, on/off switches ignored.
+export function effectiveRules(projectId: number, only: ReadonlySet<number> | null = null): RulesSnapshot {
   const categories = projectRules(projectId)
-    .filter((c) => c.enabled)
+    .filter((c) => only !== null || c.enabled)
     .map((c) => ({
       id: c.id,
       kind: c.kind,
@@ -147,7 +148,7 @@ export function effectiveRules(projectId: number): RulesSnapshot {
       description: c.description,
       globs: splitGlobs(c.globs),
       rules: c.rules
-        .filter((r) => r.enabled)
+        .filter((r) => (only === null ? r.enabled : only.has(r.id)))
         .map((r) => ({ id: r.id, name: r.name, description: r.description, severity: r.severity })),
     }))
     .filter((c) => c.rules.length > 0);
@@ -286,6 +287,82 @@ export function overrideRule(
 
 export function resetRule(projectId: number, ruleId: number): void {
   deleteRuleOverride(projectId, ruleId);
+}
+
+// --- export / import -------------------------------------------------------
+
+// Portable global rules. No ids: import matches categories and rules by name.
+//   { "version": 1, "categories": [{ "name": "Security", "color": "red", …,
+//     "rules": [{ "name": "No eval", "description": "…", … }] }] }
+const RULES_FILE_VERSION = 1;
+
+const rulesFileSchema = z.object({
+  version: z.literal(RULES_FILE_VERSION),
+  categories: z.array(categorySchema.extend({ enabled: z.boolean(), rules: z.array(ruleSchema) })),
+});
+
+export type ImportSummary = { categories: number; rules: number; skipped: number };
+
+export function exportRules() {
+  return {
+    version: RULES_FILE_VERSION,
+    categories: globalRules().map((c) => ({
+      name: c.name,
+      color: c.color,
+      description: c.description,
+      globs: c.globs,
+      enabled: c.enabled,
+      rules: c.rules.map(({ name, description, severity, enabled }) => ({ name, description, severity, enabled })),
+    })),
+  };
+}
+
+// Merges a rules file into the global rules. Names match case-insensitively:
+// unknown categories and rules are added, known ones stay untouched.
+// e.g. file "bugs" + rule "No eval" → added to the existing Bugs category
+export function importRules(text: string): ImportSummary {
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new InputError("Not a JSON file");
+  }
+
+  // Validate the whole file before writing anything.
+  const parsed = rulesFileSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new InputError("Not a rules export file");
+  }
+
+  const summary: ImportSummary = { categories: 0, rules: 0, skipped: 0 };
+  for (const c of parsed.data.categories) {
+    // Re-read each time: the file may repeat a category.
+    const match = globalRules().find((e) => sameName(e.name, c.name));
+    const categoryId = match?.id ?? createCategory(null, c);
+    if (!match) {
+      updateCategory(categoryId, { enabled: c.enabled });
+      summary.categories++;
+    }
+
+    const known = new Set((match?.rules ?? []).map((r) => r.name.toLowerCase()));
+    const fresh = c.rules.filter((r) => {
+      const key = r.name.toLowerCase();
+      const isNew = !known.has(key);
+      known.add(key);
+      return isNew;
+    });
+
+    summary.skipped += c.rules.length - fresh.length;
+    if (fresh.length > 0) {
+      summary.rules += addRules(categoryId, null, fresh);
+    }
+  }
+
+  return summary;
+}
+
+function sameName(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 function requireRule(id: number): Rule {

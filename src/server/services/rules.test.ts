@@ -95,3 +95,35 @@ describe("named rules", () => {
     });
   });
 });
+
+describe("rules export and import", () => {
+  it("adds unknown categories and rules, keeps known ones", async () => {
+    const rules = await import("./rules");
+    const file = rules.exportRules();
+    const bugs = file.categories[0];
+    file.categories = [
+      { ...bugs, name: bugs.name.toUpperCase(), rules: [...bugs.rules, { name: "No eval", description: "Never eval input.", severity: Severity.Major, enabled: true }] },
+      { name: "Imported", color: CATEGORY_COLORS[1], description: "", globs: "*.ts", enabled: false, rules: [
+        { name: "One", description: "First.", severity: Severity.Minor, enabled: true },
+        { name: "one", description: "Duplicate.", severity: Severity.Minor, enabled: true },
+      ] },
+    ];
+
+    expect(rules.importRules(JSON.stringify(file))).toEqual({ categories: 1, rules: 2, skipped: bugs.rules.length + 1 });
+    const imported = rules.globalRules().find((c) => c.name === "Imported")!;
+    expect(imported).toMatchObject({ enabled: false, globs: "*.ts" });
+    expect(imported.rules.map((r) => r.name)).toEqual(["One"]);
+    expect(rules.globalRules().find((c) => c.name === bugs.name)!.rules.at(-1)!.name).toBe("No eval");
+
+    // Re-importing changes nothing.
+    expect(rules.importRules(JSON.stringify(file)).rules).toBe(0);
+  });
+
+  it("rejects files that are not rules exports before writing", async () => {
+    const rules = await import("./rules");
+    const before = rules.globalRules().length;
+    expect(() => rules.importRules("{")).toThrow("Not a JSON file");
+    expect(() => rules.importRules(JSON.stringify({ version: 1, categories: [{ name: "X" }] }))).toThrow("Not a rules export file");
+    expect(rules.globalRules()).toHaveLength(before);
+  });
+});

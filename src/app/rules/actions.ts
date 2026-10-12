@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { refresh } from "next/cache";
 import type { ChangeScope, Severity } from "@/lib/domain";
 import * as changes from "@/server/services/ruleChanges";
+import * as ruleSets from "@/server/services/ruleSets";
 import * as rules from "@/server/services/rules";
 import { attempt } from "../result";
 
@@ -12,6 +13,7 @@ import { attempt } from "../result";
 
 export type { CategoryInput, CategoryView, RuleInput, RuleView } from "@/server/services/rules";
 export type { ChangeView } from "@/server/services/ruleChanges";
+export type { RuleSetView } from "@/server/services/ruleSets";
 
 export async function globalRules() {
   await connection();
@@ -95,6 +97,31 @@ export async function overrideRule(
 
 export async function resetRule(projectId: number, ruleId: number) {
   const result = await attempt(() => rules.resetRule(projectId, ruleId));
+  refresh();
+  return result;
+}
+
+export async function listRuleSets() {
+  await connection();
+  return ruleSets.listRuleSets();
+}
+
+// id null = new set.
+export async function saveRuleSet(id: number | null, input: ruleSets.RuleSetInput) {
+  const result = await attempt(() => ruleSets.saveRuleSet(id, input));
+  refresh();
+  return result;
+}
+
+export async function removeRuleSet(id: number) {
+  const result = await attempt(() => ruleSets.removeRuleSet(id));
+  refresh();
+  return result;
+}
+
+// Merges an exported rules file (JSON text) into the global rules.
+export async function importRules(text: string) {
+  const result = await attempt(() => rules.importRules(text));
   refresh();
   return result;
 }

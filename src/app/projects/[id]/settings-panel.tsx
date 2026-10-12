@@ -8,19 +8,23 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ModelSelect, type ModelOption } from "@/components/settings/model-select";
 import { saveProjectSettings, type Project } from "@/app/actions";
+import type { RuleSetView } from "@/app/rules/actions";
 import { Panel } from "./panel";
 
-// Per-project model and extra ignore globs.
-export function SettingsPanel({ project, models }: { project: Project; models: ModelOption[] }) {
+type Props = { project: Project; models: ModelOption[]; ruleSets: RuleSetView[] };
+
+// Per-project model, default rules and extra ignore globs.
+export function SettingsPanel({ project, models, ruleSets }: Props) {
   const [modelId, setModelId] = useState(project.modelId);
+  const [ruleSetId, setRuleSetId] = useState(project.ruleSetId);
   const [ignoreGlobs, setIgnoreGlobs] = useState(project.ignoreGlobs);
   const [pending, startTransition] = useTransition();
 
-  const dirty = modelId !== project.modelId || ignoreGlobs !== project.ignoreGlobs;
+  const dirty = modelId !== project.modelId || ruleSetId !== project.ruleSetId || ignoreGlobs !== project.ignoreGlobs;
 
   function save() {
     startTransition(async () => {
-      const result = await saveProjectSettings(project.id, { description: project.description, ignoreGlobs, modelId });
+      const result = await saveProjectSettings(project.id, { description: project.description, ignoreGlobs, modelId, ruleSetId });
       if (result.error) {
         toast.error(result.error);
         return;
@@ -35,6 +39,18 @@ export function SettingsPanel({ project, models }: { project: Project; models: M
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="project-model">Model</Label>
         <ModelSelect id="project-model" models={models} value={modelId} onChange={setModelId} nullLabel="Default model" />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="project-rules">Default rules</Label>
+        <ModelSelect
+          id="project-rules"
+          models={ruleSets.map((s) => ({ id: s.id, label: s.name }))}
+          value={ruleSetId}
+          onChange={setRuleSetId}
+          nullLabel="Switched-on rules"
+        />
+        <p className="text-xs text-muted-foreground">Preselected for new reviews. Rule sets are made on the Rules page.</p>
       </div>
 
       <div className="flex flex-col gap-1.5">

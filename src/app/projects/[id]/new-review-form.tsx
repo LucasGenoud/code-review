@@ -11,6 +11,8 @@ import { RefCombobox, type RefOption } from "@/components/projects/ref-combobox"
 import { timeAgo } from "@/components/projects/review-status";
 import { DiffMode } from "@/lib/domain";
 import { listCommits, startReview, type ChangedFile, type CommitInfo, type ProjectRefs } from "@/app/actions";
+import type { CategoryView, RuleSetView } from "@/app/rules/actions";
+import { choiceRuleIds, RulesPicker, type RulesChoice } from "./rules-picker";
 
 const MODES: { mode: DiffMode; label: string; hint: string }[] = [
   { mode: DiffMode.Uncommitted, label: "Uncommitted changes", hint: "Working tree against HEAD, untracked files included." },
@@ -30,18 +32,23 @@ type Range = { base: string | null; head: string | null };
 type Props = {
   projectId: number;
   refs: ProjectRefs;
+  ruleSets: RuleSetView[];
+  // The project's rules, for customizing one review's rules.
+  categories: CategoryView[];
+  defaultSetId: number | null;
   // Why reviews can't start, e.g. no model configured. Null = ready.
   blocker: string | null;
 };
 
 // Picks what to diff and starts a review, then opens its report.
-export function NewReviewForm({ projectId, refs, blocker }: Props) {
+export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSetId, blocker }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [loadingCommits, startLoadingCommits] = useTransition();
   const [mode, setMode] = useState(DiffMode.Uncommitted);
   const [branchFilter, setBranchFilter] = useState(ALL_BRANCHES);
   const [commitList, setCommitList] = useState(refs.commits);
+  const [rules, setRules] = useState<RulesChoice>({ setId: defaultSetId, custom: null });
 
   const commitOptions: RefOption[] = commitList.map((c) => ({
     value: c.short,
@@ -83,7 +90,7 @@ export function NewReviewForm({ projectId, refs, blocker }: Props) {
     e.preventDefault();
     startTransition(async () => {
       const source = twoRefs ? { mode, ...range } : { mode, base: null, head: null };
-      const result = await startReview(projectId, source);
+      const result = await startReview(projectId, source, choiceRuleIds(rules, ruleSets));
       if (result.error) {
         toast.error(result.error);
         return;
@@ -155,7 +162,9 @@ export function NewReviewForm({ projectId, refs, blocker }: Props) {
         </div>
       )}
 
-      <div className="flex items-center justify-end gap-3">
+      <RulesPicker value={rules} onChange={setRules} ruleSets={ruleSets} categories={categories} defaultSetId={defaultSetId} />
+
+      <div className="flex flex-wrap items-center justify-end gap-3">
         {blocker && <p className="mr-auto text-xs text-muted-foreground">{blocker}</p>}
         <Button type="submit" disabled={pending || incomplete || blocker !== null}>
           {pending ? <Loader2 className="animate-spin" /> : <Play />}

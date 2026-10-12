@@ -3,7 +3,7 @@ import { getDb } from "./db";
 import { projects, type Project } from "./schema";
 
 export type ProjectPatch = Partial<
-  Pick<Project, "description" | "ignoreGlobs" | "modelId">
+  Pick<Project, "description" | "ignoreGlobs" | "modelId" | "ruleSetId">
 >;
 
 export function allProjects(): Project[] {

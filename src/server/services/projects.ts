@@ -24,6 +24,7 @@ import type { Project } from "@/server/drivers/schema";
 import { InputError } from "./errors";
 import { resolveInRoot } from "./paths";
 import { resolveModel } from "./providers";
+import { requireRuleSet } from "./ruleSets";
 import { describePrompt, DESCRIBE_INSTRUCTIONS } from "./review/prompts";
 import { languageUsage, type LanguageUsage } from "./rules";
 
@@ -62,6 +63,8 @@ const settingsSchema = z.object({
   description: z.string(),
   ignoreGlobs: z.string(),
   modelId: z.number().int().nullable(),
+  // Absent = unchanged, e.g. when only the description is saved.
+  ruleSetId: z.number().int().nullable().optional(),
 });
 
 export type ProjectSettings = z.input<typeof settingsSchema>;
@@ -111,7 +114,12 @@ export function removeProject(id: number): void {
 
 export function saveProjectSettings(id: number, input: ProjectSettings): void {
   getProject(id);
-  updateProject(id, settingsSchema.parse(input));
+  const parsed = settingsSchema.parse(input);
+  if (parsed.ruleSetId != null) {
+    requireRuleSet(parsed.ruleSetId);
+  }
+
+  updateProject(id, parsed);
 }
 
 export async function projectRefs(id: number): Promise<ProjectRefs> {

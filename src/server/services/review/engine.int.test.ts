@@ -102,7 +102,7 @@ describe("review pipeline", () => {
     expect(languages.find((l) => l.name === "Python")?.files).toBe(1);
 
     // Review the working tree, untracked file included.
-    const reviewId = await engine.startReview(project.id, { mode: DiffMode.Uncommitted, base: null, head: null });
+    const reviewId = await engine.startReview(project.id, { mode: DiffMode.Uncommitted, base: null, head: null }, null);
     await untilIdle(reviewId);
 
     let report = reviews.getReport(reviewId);

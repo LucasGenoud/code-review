@@ -77,8 +77,9 @@ export async function describeProject(id: number) {
 }
 
 // Starts a review in the background; returns its id right away.
-export async function startReview(projectId: number, source: DiffSource) {
-  const result = await attempt(() => start(projectId, source));
+// ruleIds: exactly these rules; null = the project's enabled rules.
+export async function startReview(projectId: number, source: DiffSource, ruleIds: number[] | null) {
+  const result = await attempt(() => start(projectId, source, ruleIds));
   refresh();
   return result;
 }

@@ -12,6 +12,7 @@ import { formatCost, ReviewStatusBadge, timeAgo } from "@/components/projects/re
 import { ReviewStatus } from "@/lib/domain";
 import { getProject, listReviews, projectLanguages, projectRefs, type ReviewSummary } from "@/app/actions";
 import { removeReview } from "@/app/reviews/actions";
+import { listRuleSets, projectRules } from "@/app/rules/actions";
 import { getSettings, listModelOptions } from "@/app/settings/actions";
 import { DescriptionPanel } from "./description-panel";
 import { LanguagesPanel } from "./languages-panel";
@@ -40,7 +41,7 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
   }
 
   const { project, describing } = await getProject(id).catch(() => notFound());
-  const [models, settings] = await Promise.all([listModelOptions(), getSettings()]);
+  const [models, settings, ruleSets] = await Promise.all([listModelOptions(), getSettings(), listRuleSets()]);
 
   // Reviews need the project's model or the global default.
   const noModel = models.length === 0 || (project.modelId === null && settings.defaultModelId === null);
@@ -70,7 +71,7 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
             <CardHeader><CardTitle><h2>New review</h2></CardTitle></CardHeader>
             <CardContent>
               <Suspense fallback={<Skeleton className="h-28 w-full" />}>
-                <NewReview projectId={id} blocker={blocker} />
+                <NewReview projectId={id} defaultSetId={project.ruleSetId} blocker={blocker} />
               </Suspense>
             </CardContent>
           </Card>
@@ -88,7 +89,7 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
           <Suspense fallback={<Skeleton className="h-40 w-full" />}>
             <Languages projectId={id} />
           </Suspense>
-          <SettingsPanel project={project} models={models} />
+          <SettingsPanel project={project} models={models} ruleSets={ruleSets} />
         </aside>
       </div>
     </div>
@@ -111,9 +112,22 @@ function NoModelCallout({ hasModels }: { hasModels: boolean }) {
   );
 }
 
-async function NewReview({ projectId, blocker }: { projectId: number; blocker: string | null }) {
-  const refs = await projectRefs(projectId);
-  return <NewReviewForm projectId={projectId} refs={refs} blocker={blocker} />;
+type NewReviewProps = { projectId: number; defaultSetId: number | null; blocker: string | null };
+
+async function NewReview({ projectId, defaultSetId, blocker }: NewReviewProps) {
+  const [refs, ruleSets, categories] = await Promise.all([projectRefs(projectId), listRuleSets(), projectRules(projectId)]);
+  return (
+    // Remount on a new project default so the picker starts from it.
+    <NewReviewForm
+      key={defaultSetId ?? "switched-on"}
+      projectId={projectId}
+      refs={refs}
+      ruleSets={ruleSets}
+      categories={categories}
+      defaultSetId={defaultSetId}
+      blocker={blocker}
+    />
+  );
 }
 
 async function Languages({ projectId }: { projectId: number }) {
