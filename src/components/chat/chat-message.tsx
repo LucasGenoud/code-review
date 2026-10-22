@@ -2,13 +2,14 @@
 
 import { Fragment } from "react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
-import { ChevronRight, FlaskConical, Loader2, Wrench } from "lucide-react";
+import { Brain, ChevronRight, FlaskConical, Loader2, Wrench } from "lucide-react";
 import { cn } from "cn";
 
 // One chat message: user bubble or assistant text with light formatting,
-// tool calls as chips, sandbox runs as cards.
+// the model's thinking, tool calls as chips, sandbox runs as cards.
 
 type ToolPart = Extract<UIMessage["parts"][number], { toolCallId: string }>;
+type ReasoningPart = Extract<UIMessage["parts"][number], { type: "reasoning" }>;
 
 const RUN_CODE = "run_code";
 
@@ -19,6 +20,8 @@ const FENCE = /(```[\s\S]*?(?:```|$))/;
 const FENCE_BODY = /^```[\w+-]*\n?([\s\S]*?)(?:```)?$/;
 const INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*|#\d+\b)/;
 const FINDING_REF = /^#(\d+)$/;
+// Markdown heading lines, shown bold: "## Where orders load" → "**Where orders load**".
+const HEADING = /^#{1,6} +(.+)$/gm;
 
 type Props = {
   message: UIMessage;
@@ -41,6 +44,10 @@ export function ChatMessage({ message, findingIds, onCite }: Props) {
       {message.parts.map((part, i) => {
         if (part.type === "text") {
           return <RichText key={i} text={part.text} findingIds={findingIds} onCite={onCite} />;
+        }
+
+        if (part.type === "reasoning") {
+          return <Reasoning key={i} part={part} />;
         }
 
         if (isToolUIPart(part)) {
@@ -71,7 +78,7 @@ function RichText({ text, findingIds, onCite }: { text: string } & Omit<Props, "
 
         return (
           <p key={i} className="whitespace-pre-wrap">
-            <Inline text={segment.trim()} findingIds={findingIds} onCite={onCite} />
+            <Inline text={segment.trim().replace(HEADING, "**$1**")} findingIds={findingIds} onCite={onCite} />
           </p>
         );
       })}
@@ -110,6 +117,25 @@ function Inline({ text, findingIds, onCite }: { text: string } & Omit<Props, "me
 
     return <Fragment key={i}>{token}</Fragment>;
   });
+}
+
+// Model's thinking: open while it streams, collapsed once done.
+function Reasoning({ part }: { part: ReasoningPart }) {
+  const streaming = part.state === "streaming";
+  if (!part.text.trim() && !streaming) {
+    return null;
+  }
+
+  return (
+    <details open={streaming} className="group text-xs">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        {streaming ? <Loader2 className="size-3 animate-spin" aria-hidden /> : <Brain className="size-3" aria-hidden />}
+        {streaming ? "Thinking…" : "Thought process"}
+        <ChevronRight className="size-3 transition-transform group-open:rotate-90" aria-hidden />
+      </summary>
+      <p className="mt-1 max-h-60 overflow-y-auto border-l-2 pl-2.5 leading-relaxed whitespace-pre-wrap text-muted-foreground">{part.text}</p>
+    </details>
+  );
 }
 
 // "read_file shop/app.py", expandable to the tool output.
