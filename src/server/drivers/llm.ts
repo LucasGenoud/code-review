@@ -4,6 +4,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
+  generateId,
   generateText,
   NoObjectGeneratedError,
   Output,
@@ -13,6 +14,7 @@ import {
   toUIMessageStream,
   type LanguageModel,
   type LanguageModelUsage,
+  type TextStreamPart,
   type ToolSet,
   type UIMessage,
 } from "ai";
@@ -142,6 +144,8 @@ export async function generatePlain(
   return { text: result.text, usage: toUsage(result.usage) };
 }
 
+type ChatPart = TextStreamPart<ToolSet>;
+
 type ChatRequest = {
   instructions: string;
   messages: UIMessage[];
@@ -167,12 +171,43 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
 
   return createUIMessageStreamResponse({
     stream: toUIMessageStream({
-      stream: result.stream,
+      stream: endOnError(result.stream),
       originalMessages: req.messages,
+      // Without it answers get id "", which clash when the thread is saved.
+      generateMessageId: generateId,
+      // Show the real cause, e.g. "Failed to process successful response".
+      onError: (e) => (e instanceof Error ? e.message : String(e)),
       onEnd: async ({ messages }) => {
-        req.onEnd(messages, toUsage(await result.totalUsage));
+        // Rejects when the model failed; rethrowing here would abort the
+        // response mid-stream ("Error in input stream" in the browser).
+        const usage = await Promise.resolve(result.totalUsage).catch(() => undefined);
+        req.onEnd(messages, toUsage(usage));
       },
     }),
+  });
+}
+
+// The SDK rethrows a dropped model connection instead of emitting an error
+// part; turn it into one so the browser gets a readable error, not a broken
+// response ("Error in input stream").
+function endOnError(stream: ReadableStream<ChatPart>): ReadableStream<ChatPart> {
+  const reader = stream.getReader();
+  return new ReadableStream<ChatPart>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+
+        controller.enqueue(value);
+      } catch (error) {
+        controller.enqueue({ type: "error", error });
+        controller.close();
+      }
+    },
+    cancel: (reason) => reader.cancel(reason),
   });
 }
 
