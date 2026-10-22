@@ -33,8 +33,8 @@ describe.skipIf(!process.env.SEED_DEV)("dev seed", () => {
 
     const project = projects.listProjects().find((p) => p.path === SANDBOX) ?? (await projects.addProject(SANDBOX));
     const ids = [
-      await engine.startReview(project.id, { mode: DiffMode.Uncommitted, base: null, head: null }, null),
-      await engine.startReview(project.id, { mode: DiffMode.Branches, base: "main", head: "feature/discounts" }, null),
+      await engine.startReview(project.id, { mode: DiffMode.Uncommitted, base: null, head: null, paths: null }, null),
+      await engine.startReview(project.id, { mode: DiffMode.Branches, base: "main", head: "feature/discounts", paths: null }, null),
     ];
 
     for (const id of ids) {

@@ -7,18 +7,22 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { compactPaths, Expand, FileTree, type TreeFile } from "@/components/projects/file-tree";
 import { RefCombobox, type RefOption } from "@/components/projects/ref-combobox";
 import { timeAgo } from "@/components/projects/review-status";
 import { DiffMode } from "@/lib/domain";
-import { listCommits, startReview, type ChangedFile, type CommitInfo, type ProjectRefs } from "@/app/actions";
+import { listCommits, listFiles, startReview, type CommitInfo, type ProjectRefs } from "@/app/actions";
 import type { CategoryView, RuleSetView } from "@/app/rules/actions";
+import { EMPTY_PASTE, PastedFiles, pastedFiles, type PasteState } from "./pasted-files";
 import { choiceRuleIds, RulesPicker, type RulesChoice } from "./rules-picker";
 
 const MODES: { mode: DiffMode; label: string; hint: string }[] = [
-  { mode: DiffMode.Uncommitted, label: "Uncommitted changes", hint: "Working tree against HEAD, untracked files included." },
+  { mode: DiffMode.Uncommitted, label: "Uncommitted", hint: "Working tree against HEAD, untracked files included." },
   { mode: DiffMode.LastCommit, label: "Last commit", hint: "What HEAD changed compared to its parent." },
   { mode: DiffMode.Commits, label: "Two commits", hint: "Everything that changed from the base commit to the head commit." },
   { mode: DiffMode.Branches, label: "Two branches", hint: "Like a pull request: head's changes since it forked from base." },
+  { mode: DiffMode.Files, label: "Files", hint: "Whole files and folders of the working tree, reviewed as they are." },
+  { mode: DiffMode.Pasted, label: "Paste", hint: "Code that isn't in the repository: drop files or paste text." },
 ];
 
 // Branches tried in order as the default base.
@@ -49,6 +53,16 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
   const [branchFilter, setBranchFilter] = useState(ALL_BRANCHES);
   const [commitList, setCommitList] = useState(refs.commits);
   const [rules, setRules] = useState<RulesChoice>({ setId: defaultSetId, custom: null });
+  // Uncommitted files left out; new changes are picked by default.
+  const [excluded, setExcluded] = useState(() => new Set<string>());
+  // Working tree files for Files mode, loaded on first use.
+  const [repoFiles, setRepoFiles] = useState<TreeFile[] | null>(null);
+  const [picked, setPicked] = useState(() => new Set<string>());
+  const [loadingFiles, startLoadingFiles] = useTransition();
+  const [paste, setPaste] = useState<PasteState>(EMPTY_PASTE);
+
+  const changes: TreeFile[] = refs.changes.map((f) => ({ path: f.path, tag: f.change[0], tagLabel: f.change }));
+  const kept = new Set(changes.map((f) => f.path).filter((p) => !excluded.has(p)));
 
   const commitOptions: RefOption[] = commitList.map((c) => ({
     value: c.short,
@@ -68,7 +82,41 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
   const range = mode === DiffMode.Commits ? commits : branches;
   const setRange = mode === DiffMode.Commits ? setCommits : setBranches;
   const options = mode === DiffMode.Commits ? commitOptions : branchOptions;
-  const incomplete = twoRefs && (!range.base || !range.head);
+  const incomplete =
+    (twoRefs && (!range.base || !range.head)) ||
+    (mode === DiffMode.Uncommitted && kept.size === 0) ||
+    (mode === DiffMode.Files && picked.size === 0) ||
+    (mode === DiffMode.Pasted && pastedFiles(paste).length === 0);
+
+  function pickMode(next: DiffMode) {
+    setMode(next);
+    if (next !== DiffMode.Files || repoFiles) {
+      return;
+    }
+
+    startLoadingFiles(async () => {
+      const result = await listFiles(projectId);
+      if (result.error !== undefined) {
+        toast.error(result.error);
+        return;
+      }
+
+      setRepoFiles(result.data.map((path) => ({ path })));
+    });
+  }
+
+  // Files and folders the review covers; null = all of the diff.
+  function scope(): string[] | null {
+    if (mode === DiffMode.Files) {
+      return compactPaths(repoFiles ?? [], picked);
+    }
+
+    if (mode === DiffMode.Uncommitted && excluded.size > 0) {
+      return compactPaths(changes, kept);
+    }
+
+    return null;
+  }
 
   // Reload the commit pickers for the chosen branch; picks reset to its tip.
   function filterBranch(value: string | null) {
@@ -89,8 +137,10 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
   function submit(e: React.FormEvent) {
     e.preventDefault();
     startTransition(async () => {
-      const source = twoRefs ? { mode, ...range } : { mode, base: null, head: null };
-      const result = await startReview(projectId, source, choiceRuleIds(rules, ruleSets));
+      const refsPicked = twoRefs ? range : { base: null, head: null };
+      const source = { mode, ...refsPicked, paths: scope() };
+      const pasted = mode === DiffMode.Pasted ? pastedFiles(paste) : [];
+      const result = await startReview(projectId, source, choiceRuleIds(rules, ruleSets), pasted);
       if (result.error) {
         toast.error(result.error);
         return;
@@ -106,7 +156,7 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
         <ToggleGroup
           aria-label="What to review"
           value={[mode]}
-          onValueChange={(v) => v[0] && setMode(v[0] as DiffMode)}
+          onValueChange={(v) => v[0] && pickMode(v[0] as DiffMode)}
           spacing={0}
           className="w-full flex-wrap rounded-lg bg-muted p-0.5"
         >
@@ -124,7 +174,30 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
         <p className="text-xs text-muted-foreground">{MODES.find((m) => m.mode === mode)?.hint}</p>
       </div>
 
-      {mode === DiffMode.Uncommitted && <ChangedFiles files={refs.changes} />}
+      {mode === DiffMode.Uncommitted &&
+        (changes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No uncommitted changes.</p>
+        ) : (
+          <FileTree
+            label="Changed files"
+            files={changes}
+            selected={kept}
+            onChange={(next) => setExcluded(new Set(changes.map((f) => f.path).filter((p) => !next.has(p))))}
+            expand={Expand.All}
+          />
+        ))}
+
+      {mode === DiffMode.Files &&
+        (repoFiles === null || loadingFiles ? (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            Loading files…
+          </p>
+        ) : (
+          <FileTree label="Repository files" files={repoFiles} selected={picked} onChange={setPicked} expand={Expand.TopLevel} />
+        ))}
+
+      {mode === DiffMode.Pasted && <PastedFiles value={paste} onChange={setPaste} />}
 
       {mode === DiffMode.Commits && (
         <div className="flex min-w-0 flex-col gap-1.5">
@@ -178,29 +251,4 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
 // Default commit range: parent → tip.
 function latestTwo(list: CommitInfo[]): Range {
   return { base: list[1]?.short ?? null, head: list[0]?.short ?? null };
-}
-
-// Files the review will read, e.g. "M src/app.ts", "A notes.md".
-function ChangedFiles({ files }: { files: ChangedFile[] }) {
-  if (files.length === 0) {
-    return <p className="text-sm text-muted-foreground">No uncommitted changes.</p>;
-  }
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <p className="text-xs text-muted-foreground">
-        {files.length} changed {files.length === 1 ? "file" : "files"}
-      </p>
-      <ul className="max-h-48 overflow-y-auto rounded-lg border px-2.5 py-1.5 font-mono text-xs">
-        {files.map((f) => (
-          <li key={f.path} className="flex gap-2 py-0.5" title={`${f.change}: ${f.path}`}>
-            <span className="w-3 shrink-0 text-muted-foreground uppercase" aria-label={f.change}>
-              {f.change[0]}
-            </span>
-            <span className="min-w-0 truncate">{f.path}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
 }

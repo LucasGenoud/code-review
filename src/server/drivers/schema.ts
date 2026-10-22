@@ -151,6 +151,8 @@ export const reviews = sqliteTable("reviews", {
   // Refs as typed by the user (branch, sha). Null for modes that need none.
   base: text("base"),
   head: text("head"),
+  // JSON string[]: files and folders the review is limited to. Null = all.
+  paths: text("paths"),
   baseSha: text("base_sha"),
   // Null = working tree.
   headSha: text("head_sha"),
@@ -234,11 +236,11 @@ export const findings = sqliteTable("findings", {
   createdAt: createdAt(),
 });
 
+// One thread per review, plus one codebase Q&A thread per project (review_id null).
 export const chatMessages = sqliteTable("chat_messages", {
   id: text("id").primaryKey(),
-  reviewId: integer("review_id")
-    .notNull()
-    .references(() => reviews.id, { onDelete: "cascade" }),
+  reviewId: integer("review_id").references(() => reviews.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
   position: integer("position").notNull(),
   // JSON UIMessage.
   message: text("message").notNull(),

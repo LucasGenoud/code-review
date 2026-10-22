@@ -3,6 +3,7 @@ import picomatch from "picomatch";
 import { z } from "zod";
 import {
   CategoryKind,
+  DiffMode,
   FileChange,
   FileState,
   FindingStatus,
@@ -38,7 +39,17 @@ import {
   type FindingInput,
 } from "@/server/drivers/reviewStore";
 import type { Finding, Project, Review, ReviewFile, ReviewUnit } from "@/server/drivers/schema";
-import { headContent, loadDiff, resolveSource, type DiffSource, type Resolved } from "../diff";
+import {
+  headContent,
+  loadChanges,
+  pastedFiles,
+  pastedSchema,
+  resolveSource,
+  sourceSchema,
+  type DiffSource,
+  type PastedFile,
+  type Resolved,
+} from "../diff";
 import { parseDiff, type Hunk, type ParsedFile } from "../diffParse";
 import { InputError } from "../errors";
 import { resolveModel, type ResolvedModel } from "../providers";
@@ -103,18 +114,25 @@ export function isRunning(reviewId: number): boolean {
 // --- start -----------------------------------------------------------------
 
 // ruleIds: exactly these rules (from a rule set or picked for this review);
-// null = the project's enabled rules.
-export async function startReview(projectId: number, source: DiffSource, ruleIds: number[] | null): Promise<number> {
+// null = the project's enabled rules. pasted: the files of a Pasted review.
+export async function startReview(
+  projectId: number,
+  input: DiffSource,
+  ruleIds: number[] | null,
+  pasted: PastedFile[] = [],
+): Promise<number> {
   const project = projectById(projectId);
   if (!project) {
     throw new InputError("Unknown project");
   }
 
+  const source = sourceSchema.parse(input);
   const model = resolveModel(project.modelId);
   const resolved = await resolveSource(project.path, source);
-  const parsed = await loadDiff(project.path, resolved);
+  const parsed =
+    source.mode === DiffMode.Pasted ? pastedFiles(pastedSchema.parse(pasted)) : await loadChanges(project.path, source, resolved);
   if (parsed.length === 0) {
-    throw new InputError("No changes to review");
+    throw new InputError(source.mode === DiffMode.Files || source.mode === DiffMode.Pasted ? "Nothing to review" : "No changes to review");
   }
 
   const only = z.array(z.number().int()).nullable().parse(ruleIds);
@@ -128,6 +146,7 @@ export async function startReview(projectId: number, source: DiffSource, ruleIds
     mode: source.mode,
     base: source.base,
     head: source.head,
+    paths: source.paths && JSON.stringify(source.paths),
     ...resolved,
     modelId: model.model.id,
     modelLabel: model.label,
@@ -374,7 +393,8 @@ async function runUnit(ctx: RunContext, unit: ReviewUnit): Promise<void> {
     const categories = ctx.snapshot.categories.filter((c) => ids.includes(c.id));
     const hunks = (JSON.parse(unit.hunks) as number[]).map((i) => parsed.hunks[i]).filter(Boolean);
     const kind = categories.some((c) => c.kind === CategoryKind.Bugs) ? PassKind.Bugs : PassKind.Rules;
-    const content = await headContent(ctx.project.path, ctx.review.headSha, file.path);
+    // Pasted files exist only in their patch, which holds them whole.
+    const content = ctx.review.mode === DiffMode.Pasted ? null : await headContent(ctx.project.path, ctx.review.headSha, file.path);
 
     // Bugs pass also sees how other files use what this diff changes.
     const lookup = kind === PassKind.Bugs ? await lookupUsages(ctx, parsed, hunks) : { usages: "", usage: NO_USAGE };
@@ -588,12 +608,13 @@ export async function refreshReview(reviewId: number): Promise<{ changed: number
     throw new InputError("Unknown project");
   }
 
-  const resolved = await resolveSource(project.path, {
-    mode: review.mode,
-    base: review.base,
-    head: review.head,
-  });
-  const parsed = await loadDiff(project.path, resolved);
+  if (review.mode === DiffMode.Pasted) {
+    throw new InputError("Pasted code isn't in the project: nothing to refresh");
+  }
+
+  const source = { mode: review.mode, base: review.base, head: review.head, paths: reviewPaths(review) };
+  const resolved = await resolveSource(project.path, source);
+  const parsed = await loadChanges(project.path, source, resolved);
   const rows = new Map(filesForReview(reviewId).map((f) => [f.path, f]));
   const ignored = ignoreMatcher(project);
   let changed = 0;
@@ -637,6 +658,10 @@ export async function refreshReview(reviewId: number): Promise<{ changed: number
 
   updateReview(reviewId, { ...resolved });
   return { changed, removed: rows.size };
+}
+
+function reviewPaths(review: Review): string[] | null {
+  return review.paths ? z.array(z.string()).parse(JSON.parse(review.paths)) : null;
 }
 
 // Re-locates open findings of a file after it changed.

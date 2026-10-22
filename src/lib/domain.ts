@@ -39,6 +39,10 @@ export enum DiffMode {
   LastCommit = "last_commit",
   Commits = "commits",
   Branches = "branches",
+  // Whole files and folders picked in the working tree.
+  Files = "files",
+  // Pasted text or dropped files; not part of the repository.
+  Pasted = "pasted",
 }
 
 export enum ReviewStatus {

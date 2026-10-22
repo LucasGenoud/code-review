@@ -105,7 +105,7 @@ describe.skipIf(!process.env.EVAL)("review eval", () => {
       cases.map((c) =>
         limit(async () => {
           const t0 = Date.now();
-          const id = await engine.startReview(project.id, { mode: DiffMode.Branches, base: c.base, head: c.head }, null);
+          const id = await engine.startReview(project.id, { mode: DiffMode.Branches, base: c.base, head: c.head, paths: null }, null);
           while (engine.isRunning(id)) {
             await sleep(POLL_MS);
           }

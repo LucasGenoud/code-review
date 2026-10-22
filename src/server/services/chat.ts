@@ -2,15 +2,16 @@ import path from "node:path";
 import type { UIMessage } from "ai";
 import picomatch from "picomatch";
 import { z } from "zod";
-import { FindingStatus, ruleKey } from "@/lib/domain";
+import { DiffMode, FindingStatus, ruleKey } from "@/lib/domain";
 import type { SandboxLanguage } from "@/lib/sandbox";
 import { loadMessages, saveMessages } from "@/server/drivers/chatStore";
 import { grep, log, trackedFiles, wordUsages } from "@/server/drivers/git";
 import { defineTool, streamChat, type ChatTool } from "@/server/drivers/llm";
 import { projectById } from "@/server/drivers/projectStore";
-import { addReviewTokens, findingsForReview, reviewById } from "@/server/drivers/reviewStore";
+import { addReviewTokens, filesForReview, findingsForReview, reviewById } from "@/server/drivers/reviewStore";
 import type { Project, Review } from "@/server/drivers/schema";
 import { headContent } from "./diff";
+import { parseDiff } from "./diffParse";
 import { InputError } from "./errors";
 import { isInside } from "./paths";
 import { resolveModel } from "./providers";
@@ -177,6 +178,10 @@ run_code executes code in an isolated sandbox (${languages.join(", ")}): no netw
 
 // Paths come from the model: keep them inside the repository.
 async function readRepoFile(project: Project, review: Review, file: string): Promise<string | null> {
+  if (review.mode === DiffMode.Pasted) {
+    return pastedContent(review, file);
+  }
+
   const absolute = path.resolve(project.path, file);
   if (!isInside(project.path, absolute)) {
     return null;
@@ -184,6 +189,17 @@ async function readRepoFile(project: Project, review: Review, file: string): Pro
 
   const relative = path.relative(project.path, absolute).split(path.sep).join("/");
   return headContent(project.path, review.headSha, relative);
+}
+
+// A pasted file, rebuilt from its whole-file patch.
+function pastedContent(review: Review, file: string): string | null {
+  const row = filesForReview(review.id).find((f) => f.path === file);
+  const parsed = row && parseDiff(row.patch)[0];
+  if (!parsed) {
+    return null;
+  }
+
+  return parsed.hunks.flatMap((h) => h.lines.map((l) => l.text)).join("\n");
 }
 
 function capLines(text: string): string {

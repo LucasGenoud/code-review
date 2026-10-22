@@ -6,7 +6,7 @@ import { browse, type Listing } from "@/server/services/folders";
 import * as projects from "@/server/services/projects";
 import { listReviews as reviewsOf } from "@/server/services/reviews";
 import { startReview as start } from "@/server/services/review/engine";
-import type { DiffSource } from "@/server/services/diff";
+import type { DiffSource, PastedFile } from "@/server/services/diff";
 import { attempt } from "./result";
 
 // Projects and reviews API. Reads await connection() to stay out of
@@ -16,7 +16,7 @@ export type { Listing };
 export type { Result } from "./result";
 export type { ChangedFile, CommitInfo, LanguageUsage, Project, ProjectRefs, ProjectSettings } from "@/server/services/projects";
 export type { ReviewSummary } from "@/server/services/reviews";
-export type { DiffSource };
+export type { DiffSource, PastedFile };
 
 export async function listProjects() {
   await connection();
@@ -36,6 +36,11 @@ export async function projectRefs(id: number) {
 // Commits for the commit pickers: one branch, or all branches when null.
 export async function listCommits(id: number, branch: string | null) {
   return attempt(() => projects.projectCommits(id, branch));
+}
+
+// Files of the working tree, for picking what a Files review covers.
+export async function listFiles(id: number) {
+  return attempt(() => projects.projectFiles(id));
 }
 
 export async function projectLanguages(id: number) {
@@ -78,8 +83,9 @@ export async function describeProject(id: number) {
 
 // Starts a review in the background; returns its id right away.
 // ruleIds: exactly these rules; null = the project's enabled rules.
-export async function startReview(projectId: number, source: DiffSource, ruleIds: number[] | null) {
-  const result = await attempt(() => start(projectId, source, ruleIds));
+// pasted: the files of a Pasted review.
+export async function startReview(projectId: number, source: DiffSource, ruleIds: number[] | null, pasted: PastedFile[] = []) {
+  const result = await attempt(() => start(projectId, source, ruleIds, pasted));
   refresh();
   return result;
 }

@@ -63,15 +63,26 @@ export type Report = {
   undoableFixes: number[];
 };
 
-// "main...feature", "HEAD~1..HEAD", "working tree".
-export function rangeLabel(r: Pick<Review, "mode" | "base" | "head">): string {
+// Paths named in a review label; the rest are counted.
+const LABEL_PATHS = 3;
+
+// "main...feature", "HEAD~1..HEAD", "Files: src/app, README.md".
+export function rangeLabel(r: Pick<Review, "mode" | "base" | "head" | "paths">): string {
+  const paths: string[] = r.paths ? JSON.parse(r.paths) : [];
   const labels: Record<DiffMode, string> = {
     [DiffMode.Uncommitted]: "Uncommitted changes",
     [DiffMode.LastCommit]: "Last commit",
     [DiffMode.Commits]: `${r.base}..${r.head}`,
     [DiffMode.Branches]: `${r.base}...${r.head}`,
+    [DiffMode.Files]: "Files",
+    [DiffMode.Pasted]: "Pasted code",
   };
-  return labels[r.mode];
+  if (paths.length === 0) {
+    return labels[r.mode];
+  }
+
+  const more = paths.length > LABEL_PATHS ? ` +${paths.length - LABEL_PATHS} more` : "";
+  return `${labels[r.mode]}: ${paths.slice(0, LABEL_PATHS).join(", ")}${more}`;
 }
 
 function summarize(r: Review, findingCount: number): ReviewSummary {
@@ -259,6 +270,10 @@ async function undoFindingFix(id: number): Promise<void> {
 // Resolve the shared target and keep git-provided paths inside the project.
 function fixTarget(finding: Finding) {
   const review = requireReview(finding.reviewId);
+  if (review.mode === DiffMode.Pasted) {
+    throw new InputError("Pasted code isn't in the project: copy the fix by hand");
+  }
+
   const project = projectById(review.projectId);
   if (!project) {
     throw new InputError("Unknown project");

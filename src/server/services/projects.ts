@@ -21,6 +21,7 @@ import {
   updateProject,
 } from "@/server/drivers/projectStore";
 import type { Project } from "@/server/drivers/schema";
+import { repoFiles } from "./diff";
 import { InputError } from "./errors";
 import { resolveInRoot } from "./paths";
 import { resolveModel } from "./providers";
@@ -131,6 +132,11 @@ export async function projectRefs(id: number): Promise<ProjectRefs> {
     changedFiles(p.path),
   ]);
   return { branches: list, current, commits: recent, changes };
+}
+
+// Every file a Files review can pick, e.g. ["README.md", "src/app.ts"].
+export async function projectFiles(id: number): Promise<string[]> {
+  return repoFiles(getProject(id).path);
 }
 
 // Recent commits on one branch, or on all branches when null.
