@@ -60,7 +60,7 @@ export function RuleComposer({ trigger, children, title, description, ...body }:
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={trigger}>{children}</DialogTrigger>
 
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -172,7 +172,7 @@ function ComposerBody({ categories, initial, naming, initialName, submitLabel, o
         ))}
       </div>
 
-      <div className="max-h-[50vh] overflow-y-auto rounded-lg border">
+      <div className="max-h-[50vh] min-h-24 overflow-y-auto rounded-lg border">
         {shown.length === 0 && <p className="px-3 py-4 text-sm text-muted-foreground">No rules match.</p>}
         {shown.map((c) => (
           <CategoryGroup key={c.id} category={c} picked={picked} onToggle={toggle} />
