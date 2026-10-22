@@ -2,6 +2,7 @@
 
 import { connection } from "next/server";
 import { refresh } from "next/cache";
+import { loadProjectChat } from "@/server/services/chat";
 import { browse, type Listing } from "@/server/services/folders";
 import * as projects from "@/server/services/projects";
 import { listReviews as reviewsOf } from "@/server/services/reviews";
@@ -41,6 +42,12 @@ export async function listCommits(id: number, branch: string | null) {
 // Files of the working tree, for picking what a Files review covers.
 export async function listFiles(id: number) {
   return attempt(() => projects.projectFiles(id));
+}
+
+// The project's codebase Q&A thread.
+export async function loadCodebaseChat(id: number) {
+  await connection();
+  return loadProjectChat(id);
 }
 
 export async function projectLanguages(id: number) {

@@ -19,8 +19,9 @@ import { runCode, usableLanguages } from "./sandbox";
 import { rangeLabel } from "./reviews";
 import type { RulesSnapshot } from "./rules";
 
-// Chat about a review. The model knows the change and its findings, and can
-// read the repo through read-only tools.
+// Chat about a review, or about a project's codebase. The model reads the
+// repository through read-only tools: the reviewed version for a review,
+// the working tree for the codebase.
 
 const MAX_FILE_LINES = 400;
 const MAX_TOOL_LINES = 200;
@@ -28,7 +29,11 @@ const DEFAULT_LOG_ENTRIES = 15;
 const MAX_LOG_ENTRIES = 50;
 
 export function loadChat(reviewId: number): UIMessage[] {
-  return loadMessages(reviewId) as UIMessage[];
+  return loadMessages({ reviewId }) as UIMessage[];
+}
+
+export function loadProjectChat(projectId: number): UIMessage[] {
+  return loadMessages({ projectId }) as UIMessage[];
 }
 
 export async function chatResponse(reviewId: number, messages: UIMessage[]): Promise<Response> {
@@ -47,10 +52,37 @@ export async function chatResponse(reviewId: number, messages: UIMessage[]): Pro
     messages,
     tools: allTools,
     onEnd: (all, usage) => {
-      saveMessages(reviewId, all);
+      saveMessages({ reviewId }, all);
       addReviewTokens(reviewId, usage.input, usage.output);
     },
   });
+}
+
+// Questions about the codebase, answered from the working tree.
+export async function projectChatResponse(projectId: number, messages: UIMessage[]): Promise<Response> {
+  const project = projectById(projectId);
+  if (!project) {
+    throw new InputError("Unknown project");
+  }
+
+  const model = resolveModel(project.modelId);
+  const languages = model.model.toolCalling ? await usableLanguages() : [];
+  const allTools = model.model.toolCalling ? { ...tools(project, null), ...sandboxTools(project, languages) } : {};
+
+  return streamChat(model.config, {
+    instructions: projectInstructions(project) + sandboxNote(languages),
+    messages,
+    tools: allTools,
+    onEnd: (all) => saveMessages({ projectId }, all),
+  });
+}
+
+function projectInstructions(project: Project): string {
+  return `You answer a developer's questions about their project "${project.name}": how it works, where things are, what a piece of code does.
+Use the tools to read the repository instead of guessing, and cite files as path:line. Answer concisely; quote code when useful. You can't modify files.
+
+## Project
+${project.description || "(no description)"}`;
 }
 
 function instructions(review: Review, project: Project): string {
@@ -81,10 +113,11 @@ ${review.summary || "(none)"}
 ${findings || "(none)"}`;
 }
 
-function tools(project: Project, review: Review): Record<string, ChatTool> {
+// review null = the working tree.
+function tools(project: Project, review: Review | null): Record<string, ChatTool> {
   return {
     read_file: defineTool({
-      description: "Read a file of the reviewed version, with line numbers. Optionally a line range.",
+      description: `Read a file of the ${review ? "reviewed version" : "working tree"}, with line numbers. Optionally a line range.`,
       input: z.object({
         path: z.string().describe("Path relative to the repository root"),
         startLine: z.number().int().min(1).nullable(),
@@ -118,10 +151,10 @@ function tools(project: Project, review: Review): Record<string, ChatTool> {
     }),
     find_usages: defineTool({
       description:
-        "Find every line of the reviewed version that mentions an identifier (whole word), e.g. who calls a method. Returns path:line:text.",
+        "Find every line of the repository that mentions an identifier (whole word), e.g. who calls a method. Returns path:line:text.",
       input: z.object({ identifier: z.string().min(1).describe("e.g. savePayment") }),
       run: async ({ identifier }) => {
-        const out = await wordUsages(project.path, identifier, review.headSha, 0);
+        const out = await wordUsages(project.path, identifier, review?.headSha ?? null, 0);
         return capLines(out) || "(no usages)";
       },
     }),
@@ -177,8 +210,8 @@ run_code executes code in an isolated sandbox (${languages.join(", ")}): no netw
 }
 
 // Paths come from the model: keep them inside the repository.
-async function readRepoFile(project: Project, review: Review, file: string): Promise<string | null> {
-  if (review.mode === DiffMode.Pasted) {
+async function readRepoFile(project: Project, review: Review | null, file: string): Promise<string | null> {
+  if (review?.mode === DiffMode.Pasted) {
     return pastedContent(review, file);
   }
 
@@ -188,7 +221,7 @@ async function readRepoFile(project: Project, review: Review, file: string): Pro
   }
 
   const relative = path.relative(project.path, absolute).split(path.sep).join("/");
-  return headContent(project.path, review.headSha, relative);
+  return headContent(project.path, review?.headSha ?? null, relative);
 }
 
 // A pasted file, rebuilt from its whole-file patch.

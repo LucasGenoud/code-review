@@ -119,7 +119,7 @@ function formatAll(categories: CategoryView[]): string {
 // What the user typed in the chats of these reviews: often why a finding is wrong.
 function chatRemarks(reviewIds: number[]): string {
   return reviewIds
-    .flatMap((id) => loadMessages(id) as UIMessage[])
+    .flatMap((id) => loadMessages({ reviewId: id }) as UIMessage[])
     .filter((m) => m.role === "user")
     .map((m) => m.parts.map((p) => (p.type === "text" ? p.text : "")).join(" ").slice(0, MAX_REMARK_CHARS))
     .filter(Boolean)

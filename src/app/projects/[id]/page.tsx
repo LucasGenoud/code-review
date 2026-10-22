@@ -10,17 +10,18 @@ import { AutoRefresh } from "@/components/projects/auto-refresh";
 import { ConfirmButton } from "@/components/projects/confirm-button";
 import { formatCost, ReviewStatusBadge, timeAgo } from "@/components/projects/review-status";
 import { ReviewStatus } from "@/lib/domain";
-import { getProject, listReviews, projectLanguages, projectRefs, type ReviewSummary } from "@/app/actions";
+import { getProject, listReviews, loadCodebaseChat, projectLanguages, projectRefs, type ReviewSummary } from "@/app/actions";
 import { removeReview } from "@/app/reviews/actions";
 import { listRuleSets, projectRules } from "@/app/rules/actions";
 import { getSettings, listModelOptions } from "@/app/settings/actions";
+import { CodebaseChat } from "./codebase-chat";
 import { DescriptionPanel } from "./description-panel";
 import { LanguagesPanel } from "./languages-panel";
 import { NewReviewForm } from "./new-review-form";
 import { SettingsPanel } from "./settings-panel";
 
 // Project home:
-//   ┌ header: name, path, Rules ───────────────────────────┐
+//   ┌ header: name, path, Ask the codebase, Rules ─────────┐
 //   │ New review (primary)          │ Description          │
 //   │ Review history                │ Languages, Settings  │
 //   └───────────────────────────────┴──────────────────────┘
@@ -41,7 +42,12 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
   }
 
   const { project, describing } = await getProject(id).catch(() => notFound());
-  const [models, settings, ruleSets] = await Promise.all([listModelOptions(), getSettings(), listRuleSets()]);
+  const [models, settings, ruleSets, chat] = await Promise.all([
+    listModelOptions(),
+    getSettings(),
+    listRuleSets(),
+    loadCodebaseChat(id),
+  ]);
 
   // Reviews need the project's model or the global default.
   const noModel = models.length === 0 || (project.modelId === null && settings.defaultModelId === null);
@@ -57,10 +63,13 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
           <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
           <p className="truncate font-mono text-xs text-muted-foreground">{project.path}</p>
         </div>
-        <Button variant="outline" render={<Link href={`/projects/${id}/rules`} />} nativeButton={false}>
-          <ListChecks />
-          Rules
-        </Button>
+        <div className="flex gap-2">
+          {!noModel && <CodebaseChat projectId={id} initialMessages={chat} />}
+          <Button variant="outline" render={<Link href={`/projects/${id}/rules`} />} nativeButton={false}>
+            <ListChecks />
+            Rules
+          </Button>
+        </div>
       </header>
 
       {noModel && <NoModelCallout hasModels={models.length > 0} />}

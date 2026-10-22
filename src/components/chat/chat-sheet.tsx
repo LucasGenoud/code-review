@@ -11,15 +11,10 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Textarea } from "@/components/ui/textarea";
 import { ChatMessage } from "./chat-message";
 
-// Chat about a review in a right-side sheet. The conversation lives in this
-// component, so it survives closing the sheet.
+// Chat in a right-side sheet: about a review, or about the codebase. The
+// conversation lives in this component, so it survives closing the sheet.
 
-const STARTERS = [
-  "Which finding should I fix first?",
-  "Explain the riskiest change",
-  "Are any of the findings false positives?",
-  "Summarize this change for a PR description",
-];
+const NO_FINDINGS = new Set<number>();
 
 // Lets the report prefill or send a message, e.g. from a finding's "Ask".
 export type ChatHandle = {
@@ -28,19 +23,27 @@ export type ChatHandle = {
 };
 
 type Props = {
-  ref: React.Ref<ChatHandle>;
-  reviewId: number;
+  ref?: React.Ref<ChatHandle>;
+  // useChat endpoint, e.g. /api/reviews/3/chat.
+  api: string;
+  title: string;
+  description: string;
+  starters: string[];
+  placeholder: string;
   initialMessages: UIMessage[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  findingIds: Set<number>;
-  onCite: (id: number) => void;
+  // Findings that "#12" in answers can jump to.
+  findingIds?: Set<number>;
+  onCite?: (id: number) => void;
 };
 
-export function ReviewChat({ ref, reviewId, initialMessages, open, onOpenChange, findingIds, onCite }: Props) {
-  const [transport] = useState(() => new DefaultChatTransport({ api: `/api/reviews/${reviewId}/chat` }));
+export function ChatSheet(props: Props) {
+  const { ref, api, title, description, starters, placeholder, initialMessages, open, onOpenChange } = props;
+  const { findingIds = NO_FINDINGS, onCite = () => {} } = props;
+  const [transport] = useState(() => new DefaultChatTransport({ api }));
   const { messages, sendMessage, status, stop, error, regenerate } = useChat({
-    id: `review-${reviewId}`,
+    id: api,
     messages: initialMessages,
     transport,
   });
@@ -79,13 +82,13 @@ export function ReviewChat({ ref, reviewId, initialMessages, open, onOpenChange,
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" initialFocus={inputRef} className="w-full gap-0 p-0 data-[side=right]:sm:max-w-lg">
         <SheetHeader className="border-b pr-12">
-          <SheetTitle>Ask about this review</SheetTitle>
-          <SheetDescription>Knows the change and its findings, and reads the repository.</SheetDescription>
+          <SheetTitle>{title}</SheetTitle>
+          <SheetDescription>{description}</SheetDescription>
         </SheetHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4" aria-live="polite">
           {messages.length === 0 ? (
-            <Starters onPick={send} />
+            <Starters starters={starters} onPick={send} />
           ) : (
             <div className="flex flex-col gap-5">
               {messages.map((m) => (
@@ -127,7 +130,7 @@ export function ReviewChat({ ref, reviewId, initialMessages, open, onOpenChange,
                 }
               }}
               rows={1}
-              placeholder="Ask about a finding, e.g. #12, or the change…"
+              placeholder={placeholder}
               aria-label="Message"
               className="max-h-40 min-h-8 resize-none border-0 bg-transparent px-1.5 py-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
@@ -150,11 +153,11 @@ export function ReviewChat({ ref, reviewId, initialMessages, open, onOpenChange,
   );
 }
 
-function Starters({ onPick }: { onPick: (text: string) => void }) {
+function Starters({ starters, onPick }: { starters: string[]; onPick: (text: string) => void }) {
   return (
     <div className="flex flex-col gap-2">
       <p className="text-sm text-muted-foreground">Try asking:</p>
-      {STARTERS.map((s) => (
+      {starters.map((s) => (
         <button
           key={s}
           type="button"

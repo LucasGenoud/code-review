@@ -16,7 +16,7 @@ import {
   type Finding,
   type Report,
 } from "@/app/reviews/actions";
-import { ReviewChat, type ChatHandle } from "@/components/chat/review-chat";
+import { ChatSheet, type ChatHandle } from "@/components/chat/chat-sheet";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -29,6 +29,13 @@ import { ReportHeader } from "./report-header";
 import { Grow, ResizeHandle } from "./resize-handle";
 import { DEFAULT_FILTERS, findingAnchor, listAnchor, matchesScope, matchesStatus, sortFindings } from "./report-lib";
 import { ShortcutsDialog } from "./shortcuts-dialog";
+
+const CHAT_STARTERS = [
+  "Which finding should I fix first?",
+  "Explain the riskiest change",
+  "Are any of the findings false positives?",
+  "Summarize this change for a PR description",
+];
 
 // Review report: header, file list | diffs with inline findings | findings
 // panel, plus the chat sheet. Owns filters, selection, optimistic finding
@@ -358,9 +365,13 @@ export function ReportView({ report, chat, canVerify }: Props) {
         </SheetContent>
       </Sheet>
 
-      <ReviewChat
+      <ChatSheet
         ref={chatRef}
-        reviewId={reviewId}
+        api={`/api/reviews/${reviewId}/chat`}
+        title="Ask about this review"
+        description="Knows the change and its findings, and reads the repository."
+        starters={CHAT_STARTERS}
+        placeholder="Ask about a finding, e.g. #12, or the change…"
         initialMessages={chat}
         open={chatOpen}
         onOpenChange={setChatOpen}
