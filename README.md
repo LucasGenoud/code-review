@@ -17,6 +17,24 @@ Rule-based LLM code review for local git repos. Point it at a repo, pick what to
 
 The `sandbox` compose service runs LLM-written code. It has no network (it talks to the app only through a shared job folder), a read-only root filesystem, your repos mounted read-only, no Linux capabilities beyond switching to `nobody`, and limits of 768 MB, 1 CPU and 256 processes. Each job runs as `nobody` in a temp folder with a timeout. Outside Docker (`node sandbox/runner.mjs`) none of this applies.
 
+## Run with npx
+
+On Windows, macOS or Linux, with [Node.js](https://nodejs.org) 22+ and git:
+
+```bash
+npx @lucasgenoud/code-review
+```
+
+It serves on http://localhost:3000 (or the next free port) and opens your browser. Repos come from your home folder (`--repos <dir>` to change), data lives in your OS's app data folder (`--data <dir>`). `--help` lists the options. The code sandbox is off: outside Docker it has no isolation.
+
+CI publishes the package to npm on `v*` tags, after starting it on all three OSes (`scripts/npm/`). It needs an npm automation token in the `NPM_TOKEN` repository secret. To build and test it locally:
+
+```bash
+npm run build && node scripts/npm/pack.mjs 0.0.0-local
+cd dist/npm && npm pack --pack-destination .. && cd ../..
+node scripts/npm/smoke.mjs dist/lucasgenoud-code-review-0.0.0-local.tgz
+```
+
 ## Run with Docker
 
 Prebuilt images (published by CI from `main` to GitHub Container Registry):

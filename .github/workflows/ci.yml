@@ -2,6 +2,11 @@
 # Pushes to main and v* tags publish them to GitHub Container Registry:
 #   ghcr.io/<owner>/<repo>          (app)
 #   ghcr.io/<owner>/<repo>-sandbox  (code sandbox runner)
+#
+# Also packs the npm package (npx @lucasgenoud/code-review), smoke-tests it
+# on Linux, macOS and Windows, and publishes it to npm on v* tags:
+#   check ─► npm-pack ─► npm-smoke (3 OS) ─► npm-publish (tags only)
+# Publishing needs an npm automation token in the NPM_TOKEN secret.
 name: CI
 
 on:
@@ -73,3 +78,67 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  npm-pack:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # Tag v1.2.0 → 1.2.0; other builds get a dev version.
+      - run: node scripts/npm/pack.mjs ${{ github.ref_type == 'tag' && github.ref_name || format('0.0.0-dev.{0}', github.run_number) }}
+      - run: npm pack --pack-destination ..
+        working-directory: dist/npm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  npm-smoke:
+    needs: npm-pack
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: package
+      - name: Install and start the package
+        shell: bash
+        run: node scripts/npm/smoke.mjs package/*.tgz
+
+  npm-publish:
+    if: github.ref_type == 'tag'
+    needs: npm-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Signed provenance: links the package to this workflow run.
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: package
+      - name: Publish to npm
+        shell: bash
+        run: npm publish package/*.tgz --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

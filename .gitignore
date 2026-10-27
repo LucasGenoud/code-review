@@ -46,3 +46,6 @@ next-env.d.ts
 
 # eval run output
 /eval/results
+
+# npm package (scripts/npm/pack.mjs)
+/dist

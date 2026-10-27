@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Eval fixtures: code under review, not app code.
     "eval/bench/**",
+    // npm package built by scripts/npm/pack.mjs.
+    "dist/**",
   ]),
 ]);
 
