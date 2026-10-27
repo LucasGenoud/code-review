@@ -20,6 +20,7 @@ import {
 //   projects ─< reviews ─< review_files ─< review_units
 //                  │            └──────< findings
 //                  └─< chat_messages
+//   projects ─< chat_threads ─< chat_messages (codebase Q&A history)
 //   categories (project_id null = global) ─< rules (project_id set = project-only)
 //   category_overrides / rule_overrides: per-project tweaks of global rules
 //   rule_changes: LLM-proposed rule edits, accepted or rejected by the user
@@ -238,11 +239,24 @@ export const findings = sqliteTable("findings", {
   createdAt: createdAt(),
 });
 
-// One thread per review, plus one codebase Q&A thread per project (review_id null).
+// A codebase Q&A conversation. Title = the first question, e.g. "How are errors handled?".
+export const chatThreads = sqliteTable("chat_threads", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default(""),
+  createdAt: createdAt(),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
+// One thread per review, or a codebase Q&A thread (thread_id set).
 export const chatMessages = sqliteTable("chat_messages", {
   id: text("id").primaryKey(),
   reviewId: integer("review_id").references(() => reviews.id, { onDelete: "cascade" }),
-  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  threadId: integer("thread_id").references(() => chatThreads.id, { onDelete: "cascade" }),
   position: integer("position").notNull(),
   // JSON UIMessage.
   message: text("message").notNull(),
@@ -298,3 +312,4 @@ export type ReviewUnit = typeof reviewUnits.$inferSelect;
 export type Finding = typeof findings.$inferSelect;
 export type RuleChange = typeof ruleChanges.$inferSelect;
 export type RuleSet = typeof ruleSets.$inferSelect;
+export type ChatThreadRow = typeof chatThreads.$inferSelect;

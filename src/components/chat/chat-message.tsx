@@ -1,12 +1,15 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
-import { Brain, ChevronRight, FlaskConical, Loader2, Wrench } from "lucide-react";
+import { Brain, Check, ChevronRight, Copy, FlaskConical, Layers, Loader2, Wrench } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "cn";
+import { SUMMARY_PREFIX, type ChatMetadata } from "@/lib/chat";
 
 // One chat message: user bubble or assistant text with light formatting,
-// the model's thinking, tool calls as chips, sandbox runs as cards.
+// the model's thinking, tool calls as chips, sandbox runs as cards, code
+// blocks and answers with a copy button, a compacted conversation's summary.
 
 type ToolPart = Extract<UIMessage["parts"][number], { toolCallId: string }>;
 type ReasoningPart = Extract<UIMessage["parts"][number], { type: "reasoning" }>;
@@ -17,7 +20,9 @@ const RUN_CODE = "run_code";
 // e.g. "a ```py\nx\n``` b" → ["a ", "```py\nx\n```", " b"]. Unclosed fences
 // (while streaming) run to the end.
 const FENCE = /(```[\s\S]*?(?:```|$))/;
-const FENCE_BODY = /^```[\w+-]*\n?([\s\S]*?)(?:```)?$/;
+// e.g. "```ts\nconst a = 1;\n```" → language "ts", body "const a = 1;\n".
+const FENCE_BODY = /^```([\w+-]*)\n?([\s\S]*?)(?:```)?$/;
+const COPIED_MS = 1500;
 const INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*|#\d+\b)/;
 const FINDING_REF = /^#(\d+)$/;
 // Markdown heading lines, shown bold: "## Where orders load" → "**Where orders load**".
@@ -31,6 +36,10 @@ type Props = {
 };
 
 export function ChatMessage({ message, findingIds, onCite }: Props) {
+  if ((message.metadata as ChatMetadata | undefined)?.summary) {
+    return <SummaryCard message={message} findingIds={findingIds} onCite={onCite} />;
+  }
+
   if (message.role === "user") {
     return (
       <div className="ml-10 rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap">
@@ -39,8 +48,10 @@ export function ChatMessage({ message, findingIds, onCite }: Props) {
     );
   }
 
+  const answer = messageText(message);
+
   return (
-    <div className="flex flex-col gap-2 text-sm leading-relaxed">
+    <div className="group/answer flex flex-col gap-2 text-sm leading-relaxed">
       {message.parts.map((part, i) => {
         if (part.type === "text") {
           return <RichText key={i} text={part.text} findingIds={findingIds} onCite={onCite} />;
@@ -56,8 +67,41 @@ export function ChatMessage({ message, findingIds, onCite }: Props) {
 
         return null;
       })}
+      {answer && (
+        <CopyButton
+          text={answer}
+          label="Copy answer"
+          className="self-start opacity-0 transition-opacity group-hover/answer:opacity-100 focus-visible:opacity-100"
+        />
+      )}
     </div>
   );
+}
+
+// The text a compacted conversation was replaced with, collapsed.
+function SummaryCard({ message, findingIds, onCite }: Props) {
+  const text = messageText(message).replace(SUMMARY_PREFIX, "");
+
+  return (
+    <details className="group rounded-lg border border-dashed bg-muted/30 text-sm">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        <Layers className="size-4" aria-hidden />
+        <span className="flex-1">Earlier conversation compacted into a summary</span>
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden />
+      </summary>
+      <div className="border-t px-3 py-2 leading-relaxed">
+        <RichText text={text} findingIds={findingIds} onCite={onCite} />
+      </div>
+    </details>
+  );
+}
+
+function messageText(message: UIMessage): string {
+  return message.parts
+    .map((p) => (p.type === "text" ? p.text : ""))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 }
 
 function RichText({ text, findingIds, onCite }: { text: string } & Omit<Props, "message">) {
@@ -65,11 +109,8 @@ function RichText({ text, findingIds, onCite }: { text: string } & Omit<Props, "
     <div className="flex flex-col gap-2">
       {text.split(FENCE).map((segment, i) => {
         if (segment.startsWith("```")) {
-          return (
-            <pre key={i} className="overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-xs leading-relaxed">
-              {FENCE_BODY.exec(segment)?.[1] ?? segment}
-            </pre>
-          );
+          const [, language = "", body = segment] = FENCE_BODY.exec(segment) ?? [];
+          return <CodeBlock key={i} language={language} code={body} />;
         }
 
         if (!segment.trim()) {
@@ -83,6 +124,51 @@ function RichText({ text, findingIds, onCite }: { text: string } & Omit<Props, "
         );
       })}
     </div>
+  );
+}
+
+// Fenced code with its language and a copy button.
+function CodeBlock({ language, code }: { language: string; code: string }) {
+  return (
+    <div className="overflow-hidden rounded-md border bg-muted/50">
+      <div className="flex items-center justify-between border-b bg-muted/60 py-0.5 pr-1 pl-3">
+        <span className="font-mono text-[11px] text-muted-foreground">{language || "code"}</span>
+        <CopyButton text={code.replace(/\n$/, "")} label="Copy code" />
+      </div>
+      <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed">{code}</pre>
+    </div>
+  );
+}
+
+function CopyButton({ text, label, className }: { text: string; label: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      toast.error("Couldn't copy to the clipboard");
+      return;
+    }
+
+    setCopied(true);
+    setTimeout(() => setCopied(false), COPIED_MS);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
+        className,
+      )}
+    >
+      {copied ? <Check className="size-3" aria-hidden /> : <Copy className="size-3" aria-hidden />}
+      {copied ? "Copied" : "Copy"}
+    </button>
   );
 }
 

@@ -2,7 +2,7 @@
 
 import { connection } from "next/server";
 import { refresh } from "next/cache";
-import { loadProjectChat } from "@/server/services/chat";
+import * as chat from "@/server/services/chat";
 import { browse, type Listing } from "@/server/services/folders";
 import * as projects from "@/server/services/projects";
 import { listReviews as reviewsOf } from "@/server/services/reviews";
@@ -17,6 +17,7 @@ export type { Listing };
 export type { Result } from "./result";
 export type { ChangedFile, CommitInfo, LanguageUsage, Project, ProjectRefs, ProjectSettings } from "@/server/services/projects";
 export type { ReviewSummary } from "@/server/services/reviews";
+export type { ChatModelInfo, ThreadSummary } from "@/server/services/chat";
 export type { DiffSource, PastedFile };
 
 export async function listProjects() {
@@ -44,10 +45,42 @@ export async function listFiles(id: number) {
   return attempt(() => projects.projectFiles(id));
 }
 
-// The project's codebase Q&A thread.
-export async function loadCodebaseChat(id: number) {
+// Codebase Q&A history, most recent first.
+export async function listCodebaseThreads(projectId: number) {
   await connection();
-  return loadProjectChat(id);
+  return chat.listThreads(projectId);
+}
+
+export async function loadCodebaseThread(projectId: number, threadId: number) {
+  await connection();
+  return chat.loadThread(projectId, threadId);
+}
+
+export async function codebaseChatModel(projectId: number) {
+  await connection();
+  return chat.codebaseModel(projectId);
+}
+
+// Creates the conversation a first question goes to.
+export async function startCodebaseThread(projectId: number, question: string) {
+  return attempt(() => chat.startThread(projectId, question));
+}
+
+export async function renameCodebaseThread(projectId: number, threadId: number, title: string) {
+  const result = await attempt(() => chat.renameCodebaseThread(projectId, threadId, title));
+  refresh();
+  return result;
+}
+
+export async function deleteCodebaseThread(projectId: number, threadId: number) {
+  const result = await attempt(() => chat.removeThread(projectId, threadId));
+  refresh();
+  return result;
+}
+
+// Summarizes the conversation to free the context window. Takes seconds.
+export async function compactCodebaseThread(projectId: number, threadId: number) {
+  return attempt(() => chat.compactThread(projectId, threadId));
 }
 
 export async function projectLanguages(id: number) {

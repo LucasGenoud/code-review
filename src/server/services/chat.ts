@@ -1,15 +1,26 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { UIMessage } from "ai";
+import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import picomatch from "picomatch";
 import { z } from "zod";
+import { SUMMARY_PREFIX, type ChatMetadata, type TokenUsage } from "@/lib/chat";
 import { DiffMode, FindingStatus, ruleKey } from "@/lib/domain";
 import type { SandboxLanguage } from "@/lib/sandbox";
-import { loadMessages, saveMessages } from "@/server/drivers/chatStore";
+import {
+  deleteThread,
+  insertThread,
+  loadMessages,
+  renameThread,
+  saveMessages,
+  threadById,
+  threadsForProject,
+  touchThread,
+} from "@/server/drivers/chatStore";
 import { grep, log, trackedFiles, wordUsages } from "@/server/drivers/git";
-import { defineTool, streamChat, type ChatTool } from "@/server/drivers/llm";
+import { defineTool, generatePlain, streamChat, type ChatTool } from "@/server/drivers/llm";
 import { projectById } from "@/server/drivers/projectStore";
 import { addReviewTokens, filesForReview, findingsForReview, reviewById } from "@/server/drivers/reviewStore";
-import type { Project, Review } from "@/server/drivers/schema";
+import type { ChatThreadRow, Project, Review } from "@/server/drivers/schema";
 import { headContent } from "./diff";
 import { parseDiff } from "./diffParse";
 import { InputError } from "./errors";
@@ -21,19 +32,93 @@ import type { RulesSnapshot } from "./rules";
 
 // Chat about a review, or about a project's codebase. The model reads the
 // repository through read-only tools: the reviewed version for a review,
-// the working tree for the codebase.
+// the working tree for the codebase. Codebase conversations are kept as a
+// history of threads, and can be compacted into a summary:
+//
+//   [q1, a1, q2, a2, …] ──compact──► [summary] ──► [summary, q3, a3, …]
 
 const MAX_FILE_LINES = 400;
 const MAX_TOOL_LINES = 200;
 const DEFAULT_LOG_ENTRIES = 15;
 const MAX_LOG_ENTRIES = 50;
+const MAX_TITLE_LENGTH = 80;
+
+// Compaction sends at most this share of the context window, the latest
+// messages first. ~4 characters per token.
+const COMPACT_SHARE = 0.5;
+const CHARS_PER_TOKEN = 4;
+
+export type ThreadSummary = Pick<ChatThreadRow, "id" | "title" | "updatedAt">;
+
+// What the codebase chat runs on, for the token meter.
+export type ChatModelInfo = {
+  label: string;
+  contextWindow: number;
+  // USD per million tokens; null = unknown.
+  inputCost: number | null;
+  outputCost: number | null;
+};
 
 export function loadChat(reviewId: number): UIMessage[] {
   return loadMessages({ reviewId }) as UIMessage[];
 }
 
-export function loadProjectChat(projectId: number): UIMessage[] {
-  return loadMessages({ projectId }) as UIMessage[];
+export function listThreads(projectId: number): ThreadSummary[] {
+  return threadsForProject(projectId).map(({ id, title, updatedAt }) => ({ id, title, updatedAt }));
+}
+
+export function loadThread(projectId: number, threadId: number): UIMessage[] {
+  ownThread(projectId, threadId);
+  return loadMessages({ threadId }) as UIMessage[];
+}
+
+// A new conversation, titled by its first question's first line.
+export function startThread(projectId: number, question: string): ThreadSummary {
+  if (!projectById(projectId)) {
+    throw new InputError("Unknown project");
+  }
+
+  const { id, title, updatedAt } = insertThread(projectId, threadTitle(question));
+  return { id, title, updatedAt };
+}
+
+export function renameCodebaseThread(projectId: number, threadId: number, title: string): void {
+  ownThread(projectId, threadId);
+  renameThread(threadId, threadTitle(title));
+}
+
+export function removeThread(projectId: number, threadId: number): void {
+  ownThread(projectId, threadId);
+  deleteThread(threadId);
+}
+
+export function codebaseModel(projectId: number): ChatModelInfo | null {
+  const project = projectById(projectId);
+  if (!project) {
+    return null;
+  }
+
+  try {
+    const { model, label } = resolveModel(project.modelId);
+    return { label, contextWindow: model.contextWindow, inputCost: model.inputCost, outputCost: model.outputCost };
+  } catch {
+    return null;
+  }
+}
+
+function threadTitle(text: string): string {
+  const line = text.trim().split("\n")[0].trim();
+  return line.length > MAX_TITLE_LENGTH ? `${line.slice(0, MAX_TITLE_LENGTH - 1)}…` : line;
+}
+
+// The thread, if it belongs to the project. Ids come from the browser.
+function ownThread(projectId: number, threadId: number): ChatThreadRow {
+  const thread = threadById(threadId);
+  if (!thread || thread.projectId !== projectId) {
+    throw new InputError("Unknown conversation");
+  }
+
+  return thread;
 }
 
 export async function chatResponse(reviewId: number, messages: UIMessage[]): Promise<Response> {
@@ -59,7 +144,8 @@ export async function chatResponse(reviewId: number, messages: UIMessage[]): Pro
 }
 
 // Questions about the codebase, answered from the working tree.
-export async function projectChatResponse(projectId: number, messages: UIMessage[]): Promise<Response> {
+export async function projectChatResponse(projectId: number, threadId: number, messages: UIMessage[]): Promise<Response> {
+  ownThread(projectId, threadId);
   const project = projectById(projectId);
   if (!project) {
     throw new InputError("Unknown project");
@@ -73,8 +159,64 @@ export async function projectChatResponse(projectId: number, messages: UIMessage
     instructions: projectInstructions(project) + sandboxNote(languages),
     messages,
     tools: allTools,
-    onEnd: (all) => saveMessages({ projectId }, all),
+    onEnd: (all) => {
+      saveMessages({ threadId }, all);
+      touchThread(threadId);
+    },
   });
+}
+
+// Replaces the thread with a summary of it, to free the context window.
+// Returns the new thread.
+export async function compactThread(projectId: number, threadId: number): Promise<UIMessage[]> {
+  ownThread(projectId, threadId);
+  const project = projectById(projectId);
+  const messages = loadMessages({ threadId }) as UIMessage[];
+  if (!project || messages.length === 0) {
+    throw new InputError("Nothing to compact");
+  }
+
+  const { model, config } = resolveModel(project.modelId);
+  const maxChars = Math.floor(model.contextWindow * COMPACT_SHARE * CHARS_PER_TOKEN);
+  const { text, usage } = await generatePlain(config, {
+    instructions: compactInstructions(project),
+    prompt: transcript(messages).slice(-maxChars),
+  });
+
+  const spent = messages.reduce<TokenUsage>((sum, m) => addUsage(sum, (m.metadata as ChatMetadata | undefined)?.usage), usage);
+  const metadata: ChatMetadata = { summary: true, usage: spent, context: usage.output };
+  const summary: UIMessage = { id: randomUUID(), role: "user", parts: [{ type: "text", text: SUMMARY_PREFIX + text }], metadata };
+
+  saveMessages({ threadId }, [summary]);
+  touchThread(threadId);
+  return [summary];
+}
+
+function compactInstructions(project: Project): string {
+  return `Summarize this conversation between a developer and an assistant about the project "${project.name}", so the assistant can continue it without the original messages.
+Keep: the questions asked, the conclusions of the answers, file paths with line numbers, identifiers, short code that matters, decisions, open questions.
+Drop: pleasantries, tool chatter, repeated content. Use short bullet points under headings.`;
+}
+
+// Text and tool calls; tool outputs are left out, the model can re-read files.
+// e.g. "## Developer\nWhere are keys stored?\n\n## Assistant\n[grep {"pattern":"apiKey"}]\nIn crypto.ts…"
+function transcript(messages: UIMessage[]): string {
+  return messages
+    .map((m) => {
+      const parts = m.parts.map((p) => {
+        if (p.type === "text") {
+          return p.text;
+        }
+
+        return isToolUIPart(p) ? `[${getToolName(p)} ${JSON.stringify(p.input)}]` : "";
+      });
+      return `## ${m.role === "user" ? "Developer" : "Assistant"}\n${parts.filter(Boolean).join("\n")}`;
+    })
+    .join("\n\n");
+}
+
+function addUsage(sum: TokenUsage, usage: TokenUsage | undefined): TokenUsage {
+  return { input: sum.input + (usage?.input ?? 0), output: sum.output + (usage?.output ?? 0) };
 }
 
 function projectInstructions(project: Project): string {

@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { AlertCircle, ChevronRight, History, ListChecks } from "lucide-react";
+import { AlertCircle, ChevronRight, History, ListChecks, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -10,11 +10,10 @@ import { AutoRefresh } from "@/components/projects/auto-refresh";
 import { ConfirmButton } from "@/components/projects/confirm-button";
 import { formatCost, ReviewStatusBadge, timeAgo } from "@/components/projects/review-status";
 import { ReviewStatus } from "@/lib/domain";
-import { getProject, listReviews, loadCodebaseChat, projectLanguages, projectRefs, type ReviewSummary } from "@/app/actions";
+import { getProject, listReviews, projectLanguages, projectRefs, type ReviewSummary } from "@/app/actions";
 import { removeReview } from "@/app/reviews/actions";
 import { listRuleSets, projectRules } from "@/app/rules/actions";
 import { getSettings, listModelOptions } from "@/app/settings/actions";
-import { CodebaseChat } from "./codebase-chat";
 import { DescriptionPanel } from "./description-panel";
 import { LanguagesPanel } from "./languages-panel";
 import { NewReviewForm } from "./new-review-form";
@@ -42,12 +41,7 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
   }
 
   const { project, describing } = await getProject(id).catch(() => notFound());
-  const [models, settings, ruleSets, chat] = await Promise.all([
-    listModelOptions(),
-    getSettings(),
-    listRuleSets(),
-    loadCodebaseChat(id),
-  ]);
+  const [models, settings, ruleSets] = await Promise.all([listModelOptions(), getSettings(), listRuleSets()]);
 
   // Reviews need the project's model or the global default.
   const noModel = models.length === 0 || (project.modelId === null && settings.defaultModelId === null);
@@ -64,7 +58,12 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
           <p className="truncate font-mono text-xs text-muted-foreground">{project.path}</p>
         </div>
         <div className="flex gap-2">
-          {!noModel && <CodebaseChat projectId={id} initialMessages={chat} />}
+          {!noModel && (
+            <Button variant="outline" render={<Link href={`/projects/${id}/ask`} />} nativeButton={false}>
+              <MessageSquare />
+              Ask the codebase
+            </Button>
+          )}
           <Button variant="outline" render={<Link href={`/projects/${id}/rules`} />} nativeButton={false}>
             <ListChecks />
             Rules
