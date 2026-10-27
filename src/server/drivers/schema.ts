@@ -58,6 +58,8 @@ export const models = sqliteTable("models", {
   toolCalling: integer("tool_calling", { mode: "boolean" }).notNull().default(true),
   // JSON-schema constrained output. Turn off for servers that reject it.
   jsonSchema: integer("json_schema", { mode: "boolean" }).notNull().default(true),
+  // Null = the provider's default.
+  maxOutputTokens: integer("max_output_tokens"),
 });
 
 export const projects = sqliteTable("projects", {

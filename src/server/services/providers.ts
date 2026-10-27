@@ -46,6 +46,7 @@ const modelSchema = z.object({
   outputCost: z.number().min(0).nullable(),
   toolCalling: z.boolean(),
   jsonSchema: z.boolean(),
+  maxOutputTokens: z.number().int().min(1).nullable().default(null),
 });
 
 export type ProviderInput = z.input<typeof providerSchema>;
@@ -147,6 +148,7 @@ export function resolveModel(modelId: number | null): ResolvedModel {
       apiKey: p.apiKey ? decrypt(p.apiKey) : null,
       name: model.name,
       jsonSchema: model.jsonSchema,
+      maxOutputTokens: model.maxOutputTokens,
     },
   };
 }

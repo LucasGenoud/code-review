@@ -12,6 +12,7 @@ import {
   streamText,
   tool,
   toUIMessageStream,
+  type FinishReason,
   type LanguageModel,
   type LanguageModelUsage,
   type TextStreamPart,
@@ -19,6 +20,7 @@ import {
   type UIMessage,
 } from "ai";
 import type { z } from "zod";
+import { ChatStop, type ChatMetadata } from "@/lib/chat";
 import { ProviderKind } from "@/lib/domain";
 
 // Thin wrapper over the AI SDK so services never touch provider details.
@@ -31,6 +33,8 @@ export type ModelConfig = {
   apiKey: string | null;
   name: string;
   jsonSchema: boolean;
+  // Null = the provider's default, which can be as low as 4096.
+  maxOutputTokens: number | null;
 };
 
 export type Usage = { input: number; output: number };
@@ -57,7 +61,8 @@ const COMPATIBLE_NAME = "compatible";
 
 // Extra attempts when the model returns JSON that fails the schema.
 const OBJECT_RETRIES = 2;
-const MAX_CHAT_STEPS = 8;
+// Tool calls plus the answer. Exploring a codebase easily takes 10+ reads.
+const MAX_CHAT_STEPS = 30;
 
 function languageModel(cfg: ModelConfig): LanguageModel {
   const apiKey = cfg.apiKey ?? undefined;
@@ -110,6 +115,7 @@ export async function generateObject<T extends z.ZodType>(
         instructions: req.instructions,
         prompt: req.prompt,
         output: Output.object({ schema: req.schema }),
+        maxOutputTokens: cfg.maxOutputTokens ?? undefined,
         abortSignal: req.signal,
       });
 
@@ -138,6 +144,7 @@ export async function generatePlain(
     model: languageModel(cfg),
     instructions: req.instructions,
     prompt: req.prompt,
+    maxOutputTokens: cfg.maxOutputTokens ?? undefined,
     abortSignal: req.signal,
   });
 
@@ -154,7 +161,8 @@ type ChatRequest = {
 };
 
 // Streams a chat turn to the browser (useChat protocol), running tools
-// server-side. Calls `onEnd` with the full thread to persist it.
+// server-side. Calls `onEnd` with the full thread to persist it. The answer
+// carries ChatMetadata: tokens spent, context size, why it stopped.
 export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Response> {
   const tools: ToolSet = {};
   for (const [name, t] of Object.entries(req.tools)) {
@@ -167,7 +175,11 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
     messages: await convertToModelMessages(req.messages),
     tools,
     stopWhen: stepCountIs(MAX_CHAT_STEPS),
+    maxOutputTokens: cfg.maxOutputTokens ?? undefined,
   });
+
+  // The last step's tokens are what the next turn sends again.
+  let context = 0;
 
   return createUIMessageStreamResponse({
     stream: toUIMessageStream({
@@ -175,6 +187,18 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
       originalMessages: req.messages,
       // Without it answers get id "", which clash when the thread is saved.
       generateMessageId: generateId,
+      messageMetadata: ({ part }): ChatMetadata | undefined => {
+        if (part.type === "finish-step") {
+          context = (part.usage.inputTokens ?? 0) + (part.usage.outputTokens ?? 0);
+          return undefined;
+        }
+
+        if (part.type !== "finish") {
+          return undefined;
+        }
+
+        return { usage: toUsage(part.totalUsage), context, stop: chatStop(part.finishReason) };
+      },
       // Show the real cause, e.g. "Failed to process successful response".
       onError: (e) => (e instanceof Error ? e.message : String(e)),
       onEnd: async ({ messages }) => {
@@ -185,6 +209,15 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
       },
     }),
   });
+}
+
+// "tool-calls" on the last step = the step limit cut the loop.
+function chatStop(reason: FinishReason): ChatStop {
+  if (reason === "length") {
+    return ChatStop.OutputLimit;
+  }
+
+  return reason === "tool-calls" ? ChatStop.StepLimit : ChatStop.Done;
 }
 
 // The SDK rethrows a dropped model connection instead of emitting an error

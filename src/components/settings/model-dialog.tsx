@@ -25,6 +25,7 @@ const MAX_SUGGESTIONS = 8;
 type Form = {
   name: string;
   contextWindow: string;
+  maxOutputTokens: string;
   maxConcurrency: string;
   inputCost: string;
   outputCost: string;
@@ -68,6 +69,7 @@ export function ModelDialog({ providerId, model, suggestions, onLoadSuggestions,
         providerId,
         name: form.name,
         contextWindow: Number(form.contextWindow),
+        maxOutputTokens: form.maxOutputTokens.trim() ? Number(form.maxOutputTokens) : null,
         maxConcurrency: Number(form.maxConcurrency),
         inputCost: form.inputCost.trim() ? Number(form.inputCost) : null,
         outputCost: form.outputCost.trim() ? Number(form.outputCost) : null,
@@ -135,6 +137,15 @@ export function ModelDialog({ providerId, model, suggestions, onLoadSuggestions,
           <div className="grid grid-cols-2 gap-3">
             <NumberField id="model-context" label="Context window" hint="Tokens" value={form.contextWindow} onChange={(v) => set({ contextWindow: v })} required />
             <NumberField
+              id="model-max-output"
+              label="Max output tokens"
+              hint="Per answer. Blank = provider default, as low as 4096."
+              value={form.maxOutputTokens}
+              onChange={(v) => set({ maxOutputTokens: v })}
+            />
+            <NumberField id="model-input-cost" label="Input cost" hint="USD per 1M tokens, optional" value={form.inputCost} onChange={(v) => set({ inputCost: v })} step="any" />
+            <NumberField id="model-output-cost" label="Output cost" hint="USD per 1M tokens, optional" value={form.outputCost} onChange={(v) => set({ outputCost: v })} step="any" />
+            <NumberField
               id="model-concurrency"
               label="Max concurrency"
               hint="Parallel requests during a review"
@@ -142,8 +153,6 @@ export function ModelDialog({ providerId, model, suggestions, onLoadSuggestions,
               onChange={(v) => set({ maxConcurrency: v })}
               required
             />
-            <NumberField id="model-input-cost" label="Input cost" hint="USD per 1M tokens, optional" value={form.inputCost} onChange={(v) => set({ inputCost: v })} step="any" />
-            <NumberField id="model-output-cost" label="Output cost" hint="USD per 1M tokens, optional" value={form.outputCost} onChange={(v) => set({ outputCost: v })} step="any" />
           </div>
 
           <div className="flex flex-col gap-3 rounded-lg border p-3">
@@ -216,6 +225,7 @@ function initial(model?: Model): Form {
   return {
     name: model?.name ?? "",
     contextWindow: String(model?.contextWindow ?? DEFAULT_CONTEXT),
+    maxOutputTokens: model?.maxOutputTokens == null ? "" : String(model.maxOutputTokens),
     maxConcurrency: String(model?.maxConcurrency ?? DEFAULT_CONCURRENCY),
     inputCost: model?.inputCost == null ? "" : String(model.inputCost),
     outputCost: model?.outputCost == null ? "" : String(model.outputCost),

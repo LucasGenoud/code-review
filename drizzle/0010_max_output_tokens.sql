@@ -1,0 +1,1 @@
+ALTER TABLE `models` ADD `max_output_tokens` integer;
