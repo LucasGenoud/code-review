@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import { chatMessages, chatThreads, type ChatThreadRow } from "./schema";
 
@@ -25,25 +25,43 @@ export function loadMessages(thread: ChatThread): unknown[] {
     .map((row) => JSON.parse(row.message));
 }
 
-// Replaces the whole thread: the client always sends the full history.
+// Makes the stored thread match `messages`: the client always sends the
+// full history, but only new, changed or removed messages are written.
 export function saveMessages(thread: ChatThread, messages: { id: string }[]): void {
   const db = getDb();
   db.transaction((tx) => {
-    tx.delete(chatMessages).where(threadFilter(thread)).run();
-    if (messages.length === 0) {
-      return;
+    const stored = new Map(
+      tx
+        .select({ id: chatMessages.id, position: chatMessages.position, message: chatMessages.message })
+        .from(chatMessages)
+        .where(threadFilter(thread))
+        .all()
+        .map((row) => [row.id, row]),
+    );
+    const rows = messages.map((m, position) => ({
+      id: `${idPrefix(thread)}${m.id}`,
+      ...thread,
+      position,
+      message: JSON.stringify(m),
+    }));
+
+    const kept = new Set(rows.map((r) => r.id));
+    const removed = [...stored.keys()].filter((id) => !kept.has(id));
+    if (removed.length > 0) {
+      tx.delete(chatMessages).where(inArray(chatMessages.id, removed)).run();
     }
 
-    tx.insert(chatMessages)
-      .values(
-        messages.map((m, position) => ({
-          id: `${idPrefix(thread)}${m.id}`,
-          ...thread,
-          position,
-          message: JSON.stringify(m),
-        })),
-      )
-      .run();
+    for (const row of rows) {
+      const old = stored.get(row.id);
+      if (old?.position === row.position && old.message === row.message) {
+        continue;
+      }
+
+      tx.insert(chatMessages)
+        .values(row)
+        .onConflictDoUpdate({ target: chatMessages.id, set: { position: row.position, message: row.message } })
+        .run();
+    }
   });
 }
 

@@ -1,8 +1,9 @@
 import type { UIMessage } from "ai";
-import { chatResponse } from "@/server/services/chat";
+import { chatResponse, resumeReviewChat, stopReviewChat } from "@/server/services/chat";
 import { InputError } from "@/server/services/errors";
 
 const HTTP_BAD_REQUEST = 400;
+const HTTP_NO_CONTENT = 204;
 
 // useChat endpoint: streams the assistant's answer about a review.
 export async function POST(req: Request, ctx: RouteContext<"/api/reviews/[id]/chat">) {
@@ -21,4 +22,17 @@ export async function POST(req: Request, ctx: RouteContext<"/api/reviews/[id]/ch
 
     throw e;
   }
+}
+
+// useChat reconnect after a reload: the answer still being generated.
+export async function GET(_req: Request, ctx: RouteContext<"/api/reviews/[id]/chat">) {
+  const { id } = await ctx.params;
+  return resumeReviewChat(Number(id)) ?? new Response(null, { status: HTTP_NO_CONTENT });
+}
+
+// Stop button: ends the generation on the server, not just the download.
+export async function DELETE(_req: Request, ctx: RouteContext<"/api/reviews/[id]/chat">) {
+  const { id } = await ctx.params;
+  stopReviewChat(Number(id));
+  return new Response(null, { status: HTTP_NO_CONTENT });
 }

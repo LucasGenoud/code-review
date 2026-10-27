@@ -78,6 +78,11 @@ export async function deleteCodebaseThread(projectId: number, threadId: number) 
   return result;
 }
 
+// A file cited in an answer. Read-only.
+export async function readCodebaseFile(projectId: number, path: string) {
+  return attempt(() => chat.codebaseFile(projectId, path));
+}
+
 // Summarizes the conversation to free the context window. Takes seconds.
 export async function compactCodebaseThread(projectId: number, threadId: number) {
   return attempt(() => chat.compactThread(projectId, threadId));

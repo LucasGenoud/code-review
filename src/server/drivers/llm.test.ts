@@ -12,6 +12,8 @@ import { defineTool, streamChat, type ModelConfig } from "./llm";
 // output limit; asked "tools", it calls `ping` TOOL_ROUNDS times first.
 // Otherwise it answers "Hi".
 const DROP = "drop";
+// Answers "Hi", then never finishes.
+const HANG = "hang";
 const LONG = "long";
 const TOOLS = "tools";
 const TOOL_ROUNDS = 12;
@@ -42,6 +44,10 @@ beforeAll(async () => {
     }
 
     res.write(chunk({ role: "assistant", content: "Hi" }));
+    if (body.includes(HANG)) {
+      return;
+    }
+
     if (body.includes(DROP)) {
       setTimeout(() => res.destroy(), 20);
       return;
@@ -116,6 +122,24 @@ describe("streamChat", () => {
     const answer = saved.at(-1);
     expect(answer?.parts.some((p) => p.type === "text" && p.text === "Hi")).toBe(true);
     expect((answer?.metadata as ChatMetadata).stop).toBe(ChatStop.Done);
+  });
+
+  it("saves what was answered when stopped", async () => {
+    const stop = new AbortController();
+    let saved: UIMessage[] = [];
+    const response = await streamChat(cfg, {
+      instructions: "",
+      messages: [userMessage("u", HANG)],
+      tools: {},
+      signal: stop.signal,
+      onEnd: (all) => (saved = all),
+    });
+    setTimeout(() => stop.abort(), 100);
+    await response.text();
+
+    const answer = saved.at(-1);
+    expect(answer?.role).toBe("assistant");
+    expect(answer?.parts.some((p) => p.type === "text" && p.text === "Hi")).toBe(true);
   });
 
   it("tells the client an answer hit the output limit", async () => {

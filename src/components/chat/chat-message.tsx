@@ -1,13 +1,13 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment } from "react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
-import { Brain, Check, ChevronRight, Copy, FlaskConical, Layers, Loader2, Wrench } from "lucide-react";
-import { toast } from "sonner";
+import { Brain, ChevronRight, FlaskConical, Layers, Loader2, Wrench } from "lucide-react";
 import { cn } from "cn";
 import { SUMMARY_PREFIX, type ChatMetadata } from "@/lib/chat";
+import { CopyButton, Markdown, type CiteProps } from "./markdown";
 
-// One chat message: user bubble or assistant text with light formatting,
+// One chat message: user bubble or assistant markdown,
 // the model's thinking, tool calls as chips, sandbox runs as cards, code
 // blocks and answers with a copy button, a compacted conversation's summary.
 
@@ -16,28 +16,11 @@ type ReasoningPart = Extract<UIMessage["parts"][number], { type: "reasoning" }>;
 
 const RUN_CODE = "run_code";
 
-// Fenced code blocks, kept as separate segments when splitting.
-// e.g. "a ```py\nx\n``` b" → ["a ", "```py\nx\n```", " b"]. Unclosed fences
-// (while streaming) run to the end.
-const FENCE = /(```[\s\S]*?(?:```|$))/;
-// e.g. "```ts\nconst a = 1;\n```" → language "ts", body "const a = 1;\n".
-const FENCE_BODY = /^```([\w+-]*)\n?([\s\S]*?)(?:```)?$/;
-const COPIED_MS = 1500;
-const INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*|#\d+\b)/;
-const FINDING_REF = /^#(\d+)$/;
-// Markdown heading lines, shown bold: "## Where orders load" → "**Where orders load**".
-const HEADING = /^#{1,6} +(.+)$/gm;
+type Props = { message: UIMessage } & CiteProps;
 
-type Props = {
-  message: UIMessage;
-  // Finding ids that can be jumped to from "#12" references.
-  findingIds: Set<number>;
-  onCite: (id: number) => void;
-};
-
-export function ChatMessage({ message, findingIds, onCite }: Props) {
+export function ChatMessage({ message, ...cite }: Props) {
   if ((message.metadata as ChatMetadata | undefined)?.summary) {
-    return <SummaryCard message={message} findingIds={findingIds} onCite={onCite} />;
+    return <SummaryCard message={message} {...cite} />;
   }
 
   if (message.role === "user") {
@@ -54,7 +37,7 @@ export function ChatMessage({ message, findingIds, onCite }: Props) {
     <div className="group/answer flex flex-col gap-2 text-sm leading-relaxed">
       {message.parts.map((part, i) => {
         if (part.type === "text") {
-          return <RichText key={i} text={part.text} findingIds={findingIds} onCite={onCite} />;
+          return <Markdown key={i} text={part.text} {...cite} />;
         }
 
         if (part.type === "reasoning") {
@@ -79,7 +62,7 @@ export function ChatMessage({ message, findingIds, onCite }: Props) {
 }
 
 // The text a compacted conversation was replaced with, collapsed.
-function SummaryCard({ message, findingIds, onCite }: Props) {
+function SummaryCard({ message, ...cite }: Props) {
   const text = messageText(message).replace(SUMMARY_PREFIX, "");
 
   return (
@@ -90,7 +73,7 @@ function SummaryCard({ message, findingIds, onCite }: Props) {
         <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden />
       </summary>
       <div className="border-t px-3 py-2 leading-relaxed">
-        <RichText text={text} findingIds={findingIds} onCite={onCite} />
+        <Markdown text={text} {...cite} />
       </div>
     </details>
   );
@@ -102,107 +85,6 @@ function messageText(message: UIMessage): string {
     .filter(Boolean)
     .join("\n\n")
     .trim();
-}
-
-function RichText({ text, findingIds, onCite }: { text: string } & Omit<Props, "message">) {
-  return (
-    <div className="flex flex-col gap-2">
-      {text.split(FENCE).map((segment, i) => {
-        if (segment.startsWith("```")) {
-          const [, language = "", body = segment] = FENCE_BODY.exec(segment) ?? [];
-          return <CodeBlock key={i} language={language} code={body} />;
-        }
-
-        if (!segment.trim()) {
-          return null;
-        }
-
-        return (
-          <p key={i} className="whitespace-pre-wrap">
-            <Inline text={segment.trim().replace(HEADING, "**$1**")} findingIds={findingIds} onCite={onCite} />
-          </p>
-        );
-      })}
-    </div>
-  );
-}
-
-// Fenced code with its language and a copy button.
-function CodeBlock({ language, code }: { language: string; code: string }) {
-  return (
-    <div className="overflow-hidden rounded-md border bg-muted/50">
-      <div className="flex items-center justify-between border-b bg-muted/60 py-0.5 pr-1 pl-3">
-        <span className="font-mono text-[11px] text-muted-foreground">{language || "code"}</span>
-        <CopyButton text={code.replace(/\n$/, "")} label="Copy code" />
-      </div>
-      <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed">{code}</pre>
-    </div>
-  );
-}
-
-function CopyButton({ text, label, className }: { text: string; label: string; className?: string }) {
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      toast.error("Couldn't copy to the clipboard");
-      return;
-    }
-
-    setCopied(true);
-    setTimeout(() => setCopied(false), COPIED_MS);
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => void copy()}
-      aria-label={label}
-      title={label}
-      className={cn(
-        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
-        className,
-      )}
-    >
-      {copied ? <Check className="size-3" aria-hidden /> : <Copy className="size-3" aria-hidden />}
-      {copied ? "Copied" : "Copy"}
-    </button>
-  );
-}
-
-// Inline `code`, **bold** and #12 finding references.
-function Inline({ text, findingIds, onCite }: { text: string } & Omit<Props, "message">) {
-  return text.split(INLINE).map((token, i) => {
-    if (token.startsWith("`") && token.endsWith("`") && token.length > 2) {
-      return (
-        <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-          {token.slice(1, -1)}
-        </code>
-      );
-    }
-
-    if (token.startsWith("**") && token.endsWith("**") && token.length > 4) {
-      return <strong key={i}>{token.slice(2, -2)}</strong>;
-    }
-
-    const ref = FINDING_REF.exec(token);
-    if (ref && findingIds.has(Number(ref[1]))) {
-      return (
-        <button
-          key={i}
-          type="button"
-          onClick={() => onCite(Number(ref[1]))}
-          className="rounded font-mono text-[0.9em] text-blue-700 underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 dark:text-blue-400"
-        >
-          {token}
-        </button>
-      );
-    }
-
-    return <Fragment key={i}>{token}</Fragment>;
-  });
 }
 
 // Model's thinking: open while it streams, collapsed once done.

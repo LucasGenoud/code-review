@@ -54,8 +54,11 @@ type Props = {
   starters: string[];
   placeholder: string;
   initialMessages: UIMessage[];
-  // Runs before a message goes out, e.g. to create its thread. false cancels.
-  beforeSend?: (text: string) => Promise<boolean>;
+  // Reconnects on mount to an answer still being generated (after a reload).
+  resume?: boolean;
+  // Runs before a message goes out, e.g. to create its thread or compact
+  // the conversation. false cancels.
+  beforeSend?: (text: string, chat: ChatState) => Promise<boolean>;
   onAnswered?: () => void;
   // Right side of the composer's bottom line, e.g. the token meter.
   footer?: (chat: ChatState) => React.ReactNode;
@@ -64,17 +67,29 @@ type Props = {
   // Findings that "#12" in answers can jump to.
   findingIds?: Set<number>;
   onCite?: (id: number) => void;
+  // Opens a file cited as path:line.
+  onOpenFile?: (path: string, line: number) => void;
 };
 
 export function ChatPanel(props: Props) {
   const { ref, id, api, starters, placeholder, initialMessages, beforeSend, onAnswered, footer, columnClassName } = props;
-  const { findingIds = NO_FINDINGS, onCite = () => {} } = props;
+  const { findingIds = NO_FINDINGS, onCite = () => {}, onOpenFile } = props;
 
-  const [transport] = useState(() => new DefaultChatTransport({ api, body: props.body }));
+  // GET (reconnect) and DELETE (stop) go to the same endpoint, with the
+  // body as query, e.g. /api/projects/1/chat?threadId=3.
+  const [transport] = useState(
+    () =>
+      new DefaultChatTransport({
+        api,
+        body: props.body,
+        prepareReconnectToStreamRequest: ({ body }) => ({ api: liveUrl(api, body ?? {}) }),
+      }),
+  );
   const { messages, sendMessage, setMessages, status, stop, error, regenerate } = useChat({
     id,
     messages: initialMessages,
     transport,
+    resume: props.resume,
     onFinish: () => onAnswered?.(),
   });
   const [draft, setDraft] = useState("");
@@ -96,7 +111,7 @@ export function ChatPanel(props: Props) {
 
     setSending(true);
     try {
-      if (beforeSend && !(await beforeSend(text.trim()))) {
+      if (beforeSend && !(await beforeSend(text.trim(), { messages, busy: false, replace: setMessages }))) {
         return;
       }
 
@@ -113,6 +128,12 @@ export function ChatPanel(props: Props) {
     send: (text) => void send(text),
   }));
 
+  // Stops the download and the generation on the server.
+  function stopAnswer() {
+    void stop();
+    void fetch(liveUrl(api, props.body?.() ?? {}), { method: "DELETE" });
+  }
+
   const last = messages.at(-1);
   const stopped = !busy && last?.role === "assistant" ? (last.metadata as ChatMetadata | undefined)?.stop : undefined;
 
@@ -126,7 +147,7 @@ export function ChatPanel(props: Props) {
             ) : (
               <div className="flex flex-col gap-5">
                 {messages.map((m) => (
-                  <ChatMessage key={m.id} message={m} findingIds={findingIds} onCite={onCite} />
+                  <ChatMessage key={m.id} message={m} findingIds={findingIds} onCite={onCite} onOpenFile={onOpenFile} />
                 ))}
                 {status === "submitted" && <p className="animate-pulse text-sm text-muted-foreground">Thinking…</p>}
               </div>
@@ -188,7 +209,7 @@ export function ChatPanel(props: Props) {
               className="max-h-40 min-h-8 resize-none border-0 bg-transparent px-1.5 py-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
             {busy ? (
-              <Button type="button" size="icon-sm" variant="outline" onClick={() => void stop()} aria-label="Stop answer">
+              <Button type="button" size="icon-sm" variant="outline" onClick={stopAnswer} aria-label="Stop answer">
                 <Square />
               </Button>
             ) : (
@@ -207,6 +228,14 @@ export function ChatPanel(props: Props) {
       </form>
     </div>
   );
+}
+
+// e.g. ("/api/projects/1/chat", { threadId: 3 }) → "/api/projects/1/chat?threadId=3".
+function liveUrl(api: string, body: object): string {
+  const query = new URLSearchParams(
+    Object.entries(body).flatMap(([k, v]) => (v === null || v === undefined ? [] : [[k, String(v)]])),
+  ).toString();
+  return query ? `${api}?${query}` : api;
 }
 
 // Keeps the conversation scrolled to the bottom while content grows (tokens,

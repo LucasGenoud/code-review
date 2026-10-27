@@ -208,12 +208,23 @@ export async function grep(dir: string, pattern: string, glob?: string): Promise
 export async function wordUsages(dir: string, word: string, sha: string | null, context: number): Promise<string> {
   const where = sha ? [sha] : ["--untracked"];
   const args = ["grep", "-n", "-I", "-w", "-F", `-C${context}`, "-e", word, ...where];
-  const out = await git(dir, args, ExitPolicy.AllowNoMatch);
+  return withoutSha(await git(dir, args, ExitPolicy.AllowNoMatch), sha);
+}
+
+// Lines matching the extended regex `pattern` at commit `sha`, or in the
+// working tree (untracked files included) when null. "path:line:text" lines.
+export async function grepAt(dir: string, pattern: string, sha: string | null): Promise<string> {
+  const where = sha ? [sha] : ["--untracked"];
+  const args = ["grep", "-n", "-I", "-E", "-e", pattern, ...where];
+  return withoutSha(await git(dir, args, ExitPolicy.AllowNoMatch), sha);
+}
+
+// Searching a commit prefixes each line with "<sha>:".
+function withoutSha(out: string, sha: string | null): string {
   if (!sha) {
     return out;
   }
 
-  // Searching a commit prefixes each line with "<sha>:".
   return out
     .split("\n")
     .map((l) => (l.startsWith(`${sha}:`) ? l.slice(sha.length + 1) : l))

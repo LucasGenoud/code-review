@@ -23,6 +23,7 @@ import {
   type ChatModelInfo,
   type ThreadSummary,
 } from "@/app/actions";
+import { FileSheet, type FileRef } from "./file-sheet";
 
 // Ask the codebase, full page:
 //
@@ -47,8 +48,10 @@ const STARTERS = [
 const THOUSAND = 1_000;
 const MILLION = 1_000_000;
 const PER_MILLION = 1_000_000;
-// Context share where the meter turns amber (suggest compacting) and red.
+// Context share where the meter turns amber (suggest compacting) and red,
+// and where sending a question compacts the conversation first.
 const CONTEXT_WARN = 0.7;
+const AUTO_COMPACT = 0.8;
 const CONTEXT_FULL = 0.9;
 const PERCENT = 100;
 const DAY_MS = 86_400_000;
@@ -77,6 +80,7 @@ export function AskView({ project, model, initialThreads, initialThreadId, initi
   }));
   const [opening, setOpening] = useState<number | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [viewing, setViewing] = useState<FileRef | null>(null);
   // Read by the chat's request body, which outlives renders.
   const threadIdRef = useRef(initialThreadId);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -106,10 +110,11 @@ export function AskView({ project, model, initialThreads, initialThreadId, initi
     }
   }
 
-  // First question of a new conversation: create its thread first.
-  async function beforeSend(question: string): Promise<boolean> {
+  // First question of a new conversation: create its thread first. A full
+  // context window: compact before asking.
+  async function beforeSend(question: string, chat: ChatState): Promise<boolean> {
     if (threadIdRef.current !== null) {
-      return true;
+      return compactIfFull(threadIdRef.current, chat);
     }
 
     const result = await startCodebaseThread(project.id, question);
@@ -123,6 +128,23 @@ export function AskView({ project, model, initialThreads, initialThreadId, initi
     setActive((a) => ({ ...a, threadId: thread.id }));
     setThreads((all) => [thread, ...all]);
     window.history.replaceState(null, "", `${base}?thread=${thread.id}`);
+    return true;
+  }
+
+  async function compactIfFull(threadId: number, chat: ChatState): Promise<boolean> {
+    if (contextTokens(chat.messages) < model.contextWindow * AUTO_COMPACT) {
+      return true;
+    }
+
+    const toastId = toast.loading("Context window almost full: compacting the conversation…");
+    const result = await compactCodebaseThread(project.id, threadId);
+    if (result.error !== undefined) {
+      toast.error(`Couldn't compact: ${result.error}`, { id: toastId });
+      return true;
+    }
+
+    chat.replace(result.data);
+    toast.success("Conversation compacted to fit the context window", { id: toastId });
     return true;
   }
 
@@ -210,12 +232,16 @@ export function AskView({ project, model, initialThreads, initialThreadId, initi
           starters={STARTERS}
           placeholder="Ask about the code, e.g. Where are API keys stored?"
           initialMessages={active.messages}
+          resume={active.threadId !== null}
           beforeSend={beforeSend}
           onAnswered={onAnswered}
+          onOpenFile={(path, line) => setViewing({ path, line })}
           columnClassName="mx-auto w-full max-w-3xl"
           footer={(chat) => <TokenMeter chat={chat} model={model} projectId={project.id} threadId={active.threadId} />}
         />
       </section>
+
+      <FileSheet projectId={project.id} file={viewing} onClose={() => setViewing(null)} />
 
       <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
         <SheetContent side="left" className="w-72 gap-0 p-0">
@@ -385,7 +411,7 @@ function TokenMeter({ chat, model, projectId, threadId }: MeterProps) {
     (sum, m) => ({ input: sum.input + (m?.usage?.input ?? 0), output: sum.output + (m?.usage?.output ?? 0) }),
     { input: 0, output: 0 },
   );
-  const context = metas.findLast((m) => m?.context !== undefined)?.context ?? 0;
+  const context = contextTokens(chat.messages);
   const share = Math.min(context / model.contextWindow, 1);
   const cost =
     model.inputCost === null || model.outputCost === null
@@ -449,6 +475,12 @@ function TokenMeter({ chat, model, projectId, threadId }: MeterProps) {
       </Button>
     </div>
   );
+}
+
+// What the next turn sends: the latest answer's (or summary's) context size.
+function contextTokens(messages: UIMessage[]): number {
+  const metas = messages.map((m) => m.metadata as ChatMetadata | undefined);
+  return metas.findLast((m) => m?.context !== undefined)?.context ?? 0;
 }
 
 // 950 → "950", 12_400 → "12.4k", 200_000 → "200k", 1_000_000 → "1M".

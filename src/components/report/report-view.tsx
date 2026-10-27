@@ -27,7 +27,7 @@ import { FindingsPanel } from "./findings-panel";
 import { ReportContext } from "./report-context";
 import { ReportHeader } from "./report-header";
 import { Grow, ResizeHandle } from "./resize-handle";
-import { DEFAULT_FILTERS, findingAnchor, listAnchor, matchesScope, matchesStatus, sortFindings } from "./report-lib";
+import { DEFAULT_FILTERS, fileAnchor, findingAnchor, listAnchor, matchesScope, matchesStatus, sortFindings } from "./report-lib";
 import { ShortcutsDialog } from "./shortcuts-dialog";
 
 const CHAT_STARTERS = [
@@ -206,6 +206,18 @@ export function ReportView({ report, chat, canVerify }: Props) {
     }, delay + SCROLL_SETTLE_MS);
   }
 
+  // A file cited in a chat answer: close the chat, scroll to its diff.
+  function openFile(path: string) {
+    const file = report.files.find((f) => f.path === path);
+    if (!file) {
+      toast.info(`${path} isn't part of this review`);
+      return;
+    }
+
+    setChatOpen(false);
+    setTimeout(() => document.getElementById(fileAnchor(file.id))?.scrollIntoView({ behavior: "smooth" }), SHEET_CLOSE_MS);
+  }
+
   function ask(f: Finding) {
     chatRef.current?.prefill(`About #${f.id} (${f.path}:${f.startLine}): `);
     setChatOpen(true);
@@ -377,6 +389,7 @@ export function ReportView({ report, chat, canVerify }: Props) {
         onOpenChange={setChatOpen}
         findingIds={new Set(findings.map((f) => f.id))}
         onCite={select}
+        onOpenFile={openFile}
       />
       <ShortcutsDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </ReportContext>

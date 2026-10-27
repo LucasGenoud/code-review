@@ -130,3 +130,131 @@
     @apply font-sans;
   }
 }
+/* Chat answers rendered from markdown (components/chat/markdown.tsx). */
+.chat-markdown > * {
+  margin: 0;
+}
+
+.chat-markdown :is(ul, ol) {
+  padding-left: 1.25rem;
+}
+
+.chat-markdown ul {
+  list-style: disc;
+}
+
+.chat-markdown ol {
+  list-style: decimal;
+}
+
+.chat-markdown li + li {
+  margin-top: 0.125rem;
+}
+
+.chat-markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+
+.chat-markdown h1 {
+  font-size: 1.05rem;
+}
+
+.chat-markdown blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.chat-markdown hr {
+  border-color: var(--border);
+}
+
+/* Syntax highlighting (highlight.js classes from rehype-highlight). */
+.hljs-comment,
+.hljs-quote {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-meta {
+  color: var(--color-violet-700);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition {
+  color: var(--color-green-700);
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-symbol {
+  color: var(--color-amber-700);
+}
+
+.hljs-title,
+.hljs-section {
+  color: var(--color-blue-700);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-variable,
+.hljs-params {
+  color: var(--color-cyan-700);
+}
+
+.hljs-type,
+.hljs-class {
+  color: var(--color-teal-700);
+}
+
+.hljs-deletion {
+  color: var(--color-red-700);
+}
+
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-built_in,
+.dark .hljs-meta {
+  color: var(--color-violet-300);
+}
+
+.dark .hljs-string,
+.dark .hljs-regexp,
+.dark .hljs-addition {
+  color: var(--color-green-300);
+}
+
+.dark .hljs-number,
+.dark .hljs-literal,
+.dark .hljs-symbol {
+  color: var(--color-amber-300);
+}
+
+.dark .hljs-title,
+.dark .hljs-section {
+  color: var(--color-blue-300);
+}
+
+.dark .hljs-attr,
+.dark .hljs-attribute,
+.dark .hljs-property,
+.dark .hljs-variable,
+.dark .hljs-params {
+  color: var(--color-cyan-300);
+}
+
+.dark .hljs-type,
+.dark .hljs-class {
+  color: var(--color-teal-300);
+}
+
+.dark .hljs-deletion {
+  color: var(--color-red-300);
+}

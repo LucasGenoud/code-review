@@ -12,6 +12,7 @@ import {
   streamText,
   tool,
   toUIMessageStream,
+  UI_MESSAGE_STREAM_HEADERS,
   type FinishReason,
   type LanguageModel,
   type LanguageModelUsage,
@@ -155,8 +156,13 @@ type ChatPart = TextStreamPart<ToolSet>;
 
 type ChatRequest = {
   instructions: string;
+  // The whole thread, persisted by onEnd.
   messages: UIMessage[];
+  // What the model sees, e.g. with old tool outputs trimmed. Default: messages.
+  history?: UIMessage[];
   tools: Record<string, ChatTool>;
+  // Stops the answer; onEnd still saves what was generated.
+  signal?: AbortSignal;
   onEnd: (messages: UIMessage[], usage: Usage) => void;
 };
 
@@ -172,10 +178,11 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
   const result = streamText({
     model: languageModel(cfg),
     instructions: req.instructions,
-    messages: await convertToModelMessages(req.messages),
+    messages: await convertToModelMessages(req.history ?? req.messages),
     tools,
     stopWhen: stepCountIs(MAX_CHAT_STEPS),
     maxOutputTokens: cfg.maxOutputTokens ?? undefined,
+    abortSignal: req.signal,
   });
 
   // The last step's tokens are what the next turn sends again.
@@ -209,6 +216,11 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
       },
     }),
   });
+}
+
+// A chat stream's bytes (e.g. replayed) as a useChat response.
+export function chatStreamResponse(body: ReadableStream<Uint8Array>): Response {
+  return new Response(body, { headers: UI_MESSAGE_STREAM_HEADERS });
 }
 
 // "tool-calls" on the last step = the step limit cut the loop.
