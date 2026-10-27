@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, ViewTransition } from "react";
 import Link from "next/link";
 import { ChevronRight, FolderGit2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,8 +22,16 @@ export default function Home() {
         <AddProjectDialog />
       </header>
 
-      <Suspense fallback={<ListSkeleton />}>
-        <ProjectList />
+      <Suspense
+        fallback={
+          <ViewTransition exit="skeleton-exit" default="none">
+            <ListSkeleton />
+          </ViewTransition>
+        }
+      >
+        <ViewTransition enter="content-enter" default="none">
+          <ProjectList />
+        </ViewTransition>
       </Suspense>
     </main>
   );
@@ -51,7 +59,7 @@ async function ProjectList() {
 
   return (
     <Card className="gap-0 py-0">
-      <ul className="divide-y">
+      <ul className="stagger divide-y">
         {projects.map((p) => (
           <ProjectRow key={p.id} project={p} />
         ))}
@@ -66,7 +74,7 @@ async function ProjectRow({ project }: { project: Project }) {
 
   return (
     <li className="group relative flex items-center gap-4 px-5 py-5 transition-colors hover:bg-muted/50">
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-muted">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-muted transition-colors group-hover:border-primary/40 group-hover:bg-primary/10">
         <FolderGit2 className="size-5 text-primary" />
       </div>
 
@@ -103,7 +111,7 @@ async function ProjectRow({ project }: { project: Project }) {
         />
       </div>
 
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-foreground" aria-hidden />
     </li>
   );
 }

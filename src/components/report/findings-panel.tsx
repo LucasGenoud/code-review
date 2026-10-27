@@ -138,12 +138,15 @@ function SeverityTotal({ severity, count, pressed, onToggle }: { severity: Sever
       aria-pressed={pressed}
       onClick={onToggle}
       className={cn(
-        "flex flex-col items-start rounded-md border px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
+        "flex flex-col items-start rounded-md border px-2 py-1.5 text-left outline-none transition-[background-color,border-color,opacity,scale] hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-95",
         pressed && "border-foreground/40 bg-muted",
         count === 0 && !pressed && "opacity-50",
       )}
     >
-      <span className="text-base leading-none font-semibold tabular-nums">{count}</span>
+      <span className="text-base leading-none font-semibold tabular-nums">
+        {/* Keyed so each change replays the pop. */}
+        <span key={count} className="count-bump">{count}</span>
+      </span>
       <span className={cn("mt-1 rounded px-1 text-[10px] font-semibold tracking-wide uppercase", SEVERITY_CLASSES[severity])}>{severity}</span>
     </button>
   );
@@ -156,7 +159,7 @@ function CategoryChip({ category, count, pressed, onToggle }: { category: Catego
       aria-pressed={pressed}
       onClick={onToggle}
       className={cn(
-        "inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-xs outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
+        "inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-xs outline-none transition-[background-color,border-color,scale] hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-95",
         pressed ? "border-foreground/40 bg-muted font-medium" : "text-muted-foreground",
       )}
     >
@@ -171,7 +174,7 @@ function FindingItem({ finding: f, category, selected, onSelect }: { finding: Fi
   const closed = f.status !== FindingStatus.Open;
 
   return (
-    <li id={listAnchor(f.id)}>
+    <li id={listAnchor(f.id)} className="rise-in">
       <button
         type="button"
         aria-current={selected || undefined}

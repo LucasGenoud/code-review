@@ -258,3 +258,82 @@
 .dark .hljs-deletion {
   color: var(--color-red-300);
 }
+
+/* Motion: one timing scale for every enter, exit and route change.
+   Everything below is skipped under prefers-reduced-motion. */
+:root {
+  --motion-fast: 150ms;
+  --motion-base: 220ms;
+  --motion-slow: 320ms;
+  --motion-stagger: 35ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes count-bump {
+  40% {
+    transform: scale(1.18);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Content arriving: lists, revealed panels, new findings. */
+  .rise-in {
+    animation: rise-in var(--motion-base) var(--ease-out) both;
+  }
+
+  /* List children rise one after another, e.g. project rows. */
+  .stagger > * {
+    animation: rise-in var(--motion-slow) var(--ease-out) both;
+  }
+
+  .stagger > :nth-child(2) { animation-delay: calc(var(--motion-stagger) * 1); }
+  .stagger > :nth-child(3) { animation-delay: calc(var(--motion-stagger) * 2); }
+  .stagger > :nth-child(4) { animation-delay: calc(var(--motion-stagger) * 3); }
+  .stagger > :nth-child(5) { animation-delay: calc(var(--motion-stagger) * 4); }
+  .stagger > :nth-child(6) { animation-delay: calc(var(--motion-stagger) * 5); }
+  .stagger > :nth-child(7) { animation-delay: calc(var(--motion-stagger) * 6); }
+  .stagger > :nth-child(n + 8) { animation-delay: calc(var(--motion-stagger) * 7); }
+
+  /* A changed number pops once, e.g. a severity total. */
+  .count-bump {
+    display: inline-block;
+    animation: count-bump var(--motion-slow) var(--ease-out);
+  }
+
+  /* Route change (app/template.tsx): old page fades, new one rises. */
+  ::view-transition-old(.page-exit) {
+    animation: fade-out var(--motion-fast) ease-in both;
+  }
+
+  ::view-transition-new(.page-enter) {
+    animation: rise-in var(--motion-slow) var(--ease-out) var(--motion-fast) both;
+  }
+
+  /* Skeleton hands over to loaded content. */
+  ::view-transition-old(.skeleton-exit) {
+    animation: fade-out var(--motion-fast) ease-in both;
+  }
+
+  ::view-transition-new(.content-enter) {
+    animation: rise-in var(--motion-base) var(--ease-out) both;
+  }
+}
+
+/* Header and other unchanged chrome swap instantly, no crossfade. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}

@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, ViewTransition } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AlertCircle, ChevronRight, History, ListChecks, MessageSquare } from "lucide-react";
@@ -27,8 +27,16 @@ import { SettingsPanel } from "./settings-panel";
 export default function ProjectPage({ params }: PageProps<"/projects/[id]">) {
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-8">
-      <Suspense fallback={<PageSkeleton />}>
-        <ProjectView params={params} />
+      <Suspense
+        fallback={
+          <ViewTransition exit="skeleton-exit" default="none">
+            <PageSkeleton />
+          </ViewTransition>
+        }
+      >
+        <ViewTransition enter="content-enter" default="none">
+          <ProjectView params={params} />
+        </ViewTransition>
       </Suspense>
     </main>
   );
@@ -160,7 +168,7 @@ async function ReviewHistory({ projectId }: { projectId: number }) {
   }
 
   return (
-    <ul className="divide-y overflow-hidden rounded-xl border bg-card">
+    <ul className="stagger divide-y overflow-hidden rounded-xl border bg-card">
       {reviews.some((r) => r.status === ReviewStatus.Running) && <AutoRefresh />}
       {reviews.map((r) => (
         <ReviewRow key={r.id} review={r} />
@@ -174,7 +182,7 @@ function ReviewRow({ review: r }: { review: ReviewSummary }) {
   const findings = `${r.findingCount} open ${r.findingCount === 1 ? "finding" : "findings"}`;
 
   return (
-    <li className="relative flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-muted/50">
+    <li className="group relative flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-muted/50">
       <ReviewStatusBadge status={r.status} className="w-20" />
 
       <div className="min-w-0 flex-1">
@@ -204,7 +212,7 @@ function ReviewRow({ review: r }: { review: ReviewSummary }) {
         />
       </div>
 
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" aria-hidden />
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground/50 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-foreground" aria-hidden />
     </li>
   );
 }

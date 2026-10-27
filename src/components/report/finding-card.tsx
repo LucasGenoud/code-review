@@ -123,7 +123,7 @@ function ClosedFinding({ finding: f }: { finding: Finding }) {
       </div>
 
       {expanded && (
-        <div className="border-t">
+        <div className="rise-in border-t">
           {f.dismissReason && (
             <p className="px-3 pt-2 text-xs text-muted-foreground">
               <span className="font-medium">Dismissed because:</span> {f.dismissReason}
@@ -139,7 +139,7 @@ function ClosedFinding({ finding: f }: { finding: Finding }) {
 
 function cardClass(f: Finding, color: string | undefined, selectedId: number | null, flashId: number | null): string {
   return cn(
-    "scroll-my-24 overflow-hidden rounded-md border border-l-[3px] bg-card text-card-foreground shadow-xs transition-shadow",
+    "rise-in scroll-my-24 overflow-hidden rounded-md border border-l-[3px] bg-card text-card-foreground shadow-xs transition-shadow",
     categoryClasses(color ?? "slate").border,
     selectedId === f.id && "ring-2 ring-ring",
     flashId === f.id && "finding-flash",
