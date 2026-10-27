@@ -172,14 +172,15 @@ function ComposerBody({ categories, initial, naming, initialName, submitLabel, o
         ))}
       </div>
 
-      <div className="max-h-[50vh] min-h-24 overflow-y-auto rounded-lg border">
+      {/* relative: contains the sr-only legends, which would otherwise stretch the dialog's scroll. */}
+      <div className="relative max-h-[50vh] min-h-24 overflow-y-auto rounded-lg border">
         {shown.length === 0 && <p className="px-3 py-4 text-sm text-muted-foreground">No rules match.</p>}
         {shown.map((c) => (
           <CategoryGroup key={c.id} category={c} picked={picked} onToggle={toggle} />
         ))}
       </div>
 
-      <DialogFooter className="items-center">
+      <DialogFooter className="flex-row items-center">
         <span className="mr-auto text-sm text-muted-foreground tabular-nums">
           {picked.size} {picked.size === 1 ? "rule" : "rules"} selected
         </span>
