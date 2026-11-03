@@ -1,13 +1,13 @@
 "use client";
 
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Clock, Loader2 } from "lucide-react";
 import { cn } from "cn";
 import type { Finding, ReviewFile, UnitView } from "@/app/reviews/actions";
 import { CategoryDot } from "@/components/category-badge";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FileChange, FileState, FindingStatus, UnitStatus } from "@/lib/domain";
-import { fileAnchor, isFinished, splitPath, type Category } from "./report-lib";
+import { fileAnchor, FileProgress, fileProgress, isFinished, splitPath, unitsOfFile, type Category } from "./report-lib";
 
 // Left pane: changed files with open findings per category and review state.
 
@@ -37,7 +37,7 @@ export function FileList({ files, units, findings, categories }: Props) {
           <FileRow
             key={file.id}
             file={file}
-            units={units.filter((u) => u.fileId === file.id)}
+            units={unitsOfFile(units, file.id)}
             findings={findings.filter((f) => f.fileId === file.id && f.status === FindingStatus.Open)}
             categories={categories}
           />
@@ -54,6 +54,7 @@ export function FileList({ files, units, findings, categories }: Props) {
 function FileRow({ file, units, findings, categories }: Omit<Props, "files"> & { file: ReviewFile }) {
   const { dir, name } = splitPath(file.path);
   const skipped = file.state === FileState.Skipped;
+  const reviewing = fileProgress(units) === FileProgress.Reviewing;
 
   return (
     <li>
@@ -66,12 +67,15 @@ function FileRow({ file, units, findings, categories }: Omit<Props, "files"> & {
         className={cn(
           "flex items-center gap-2 rounded-md px-1.5 py-1 text-[13px] outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
           skipped && "opacity-50",
+          reviewing && "bg-primary/5 ring-1 ring-primary/20 ring-inset",
         )}
+        aria-current={reviewing ? "step" : undefined}
       >
         <ChangeIcon change={file.change} />
+        {/* Name first: in a narrow column the directory is what gets cut. */}
         <span className="min-w-0 flex-1 truncate font-mono text-xs" title={file.path}>
-          <span className="text-muted-foreground">{dir}</span>
           {name}
+          {dir && <span className="ml-1.5 text-muted-foreground">{dir.replace(/\/$/, "")}</span>}
         </span>
         <FileStatus file={file} units={units} />
         <CategoryCounts findings={findings} categories={categories} />
@@ -99,10 +103,11 @@ function CategoryCounts({ findings, categories }: { findings: Finding[]; categor
   );
 }
 
-// Skipped / changed / failed / in progress, as a small icon with a tooltip.
+// Skipped / changed / failed / reviewing / queued, as a small icon with a
+// tooltip.
 function FileStatus({ file, units }: { file: ReviewFile; units: UnitView[] }) {
   const failed = units.find((u) => u.status === UnitStatus.Failed);
-  const active = units.some((u) => u.status === UnitStatus.Running || u.status === UnitStatus.Pending);
+  const progress = fileProgress(units);
 
   if (file.state === FileState.Skipped) {
     return <StatusHint label={`Skipped: ${file.skipReason ?? "not reviewed"}`}>skipped</StatusHint>;
@@ -124,13 +129,21 @@ function FileStatus({ file, units }: { file: ReviewFile; units: UnitView[] }) {
     );
   }
 
-  if (active) {
+  if (progress === FileProgress.Reviewing) {
     return (
-      <StatusHint label="Reviewing">
-        <Loader2 className="size-3 animate-spin" />
+      <StatusHint label={`Reviewing now: ${units.filter(isFinished).length} of ${units.length} passes done`}>
+        <Loader2 className="size-3 animate-spin text-primary" />
         <span className="tabular-nums">
           {units.filter(isFinished).length}/{units.length}
         </span>
+      </StatusHint>
+    );
+  }
+
+  if (progress === FileProgress.Queued) {
+    return (
+      <StatusHint label="Queued: waits for a free model slot">
+        <Clock className="size-3" />
       </StatusHint>
     );
   }

@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DiffModeEnum, DiffView, getLang } from "@git-diff-view/react";
 import "@git-diff-view/react/styles/diff-view-pure.css";
 import "./diff.css";
-import { AlertTriangle, EyeOff, RefreshCw } from "lucide-react";
+import { AlertTriangle, Clock, EyeOff, Loader2, RefreshCw } from "lucide-react";
 import { cn } from "cn";
 import type { Finding, ReviewFile, UnitView } from "@/app/reviews/actions";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { ChangeIcon } from "./file-list";
 import { FindingStack } from "./finding-card";
 import { PromptMenu } from "./prompt-dialog";
 import { useReport } from "./report-context";
-import { fileAnchor, isInDiff, lineStats, newLineRanges, sortFindings, splitPath } from "./report-lib";
+import { fileAnchor, FileProgress, fileProgress, isInDiff, lineStats, newLineRanges, sortFindings, splitPath } from "./report-lib";
 
 // One changed file: sticky header, unified diff, findings inline under the
 // line they end on. Findings outside the shown hunks are listed on top.
@@ -72,6 +72,7 @@ function FileHeader({ file, units, findings }: Omit<Props, "theme">) {
   const { added, removed } = lineStats(file.patch);
   const open = findings.filter((f) => f.status === FindingStatus.Open).length;
   const failed = units.filter((u) => u.status === UnitStatus.Failed).length;
+  const progress = fileProgress(units);
 
   return (
     <header className="sticky top-0 z-10 flex h-10 items-center gap-2 border-b bg-muted px-4">
@@ -93,6 +94,18 @@ function FileHeader({ file, units, findings }: Omit<Props, "theme">) {
         <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-500/10 px-2 text-[11px] font-medium text-blue-700 dark:text-blue-300">
           <RefreshCw className="size-3" aria-hidden />
           Changed
+        </span>
+      )}
+      {progress === FileProgress.Reviewing && (
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 text-[11px] font-medium text-primary">
+          <Loader2 className="size-3 animate-spin" aria-hidden />
+          Reviewing
+        </span>
+      )}
+      {progress === FileProgress.Queued && (
+        <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+          <Clock className="size-3" aria-hidden />
+          Queued
         </span>
       )}
       {failed > 0 && (
@@ -123,6 +136,21 @@ function FileBody({ file, extend, findings, theme }: BodyProps) {
   const [ref, near] = useNearViewport();
   const byId = new Map(findings.map((f) => [f.id, f]));
   const skipped = file.state === FileState.Skipped;
+  const lang = getLang(file.path);
+
+  // Stable while the patch is: a new object makes the diff library re-parse
+  // and re-highlight the file, which flickers on every live update.
+  const data = useMemo(
+    () => ({
+      oldFile: { fileName: file.oldPath ?? file.path, fileLang: lang },
+      newFile: { fileName: file.path, fileLang: lang },
+      hunks: [file.patch],
+    }),
+    [file.oldPath, file.path, file.patch, lang],
+  );
+  const extendKey = JSON.stringify(extend);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on content, not identity.
+  const extendData = useMemo(() => ({ newFile: extend }), [extendKey]);
 
   // Binary files and pure renames have no hunks.
   if (!file.patch.includes("\n@@")) {
@@ -147,17 +175,11 @@ function FileBody({ file, extend, findings, theme }: BodyProps) {
     return <div ref={ref} style={{ height: rows * LINE_HEIGHT_PX + findings.length * CARD_HEIGHT_PX }} />;
   }
 
-  const lang = getLang(file.path);
-
   return (
     <div className={cn("report-diff", skipped && "opacity-70")}>
       <DiffView<number[]>
-        data={{
-          oldFile: { fileName: file.oldPath ?? file.path, fileLang: lang },
-          newFile: { fileName: file.path, fileLang: lang },
-          hunks: [file.patch],
-        }}
-        extendData={{ newFile: extend }}
+        data={data}
+        extendData={extendData}
         renderExtendLine={({ data }) => (
           <FindingStack findings={data.flatMap((id) => byId.get(id) ?? [])} />
         )}

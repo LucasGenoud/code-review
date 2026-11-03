@@ -8,13 +8,13 @@ const HTTP_NO_CONTENT = 204;
 // useChat endpoint: streams the assistant's answer about a review.
 export async function POST(req: Request, ctx: RouteContext<"/api/reviews/[id]/chat">) {
   const { id } = await ctx.params;
-  const body = (await req.json()) as { messages?: UIMessage[] };
+  const body = (await req.json()) as { messages?: UIMessage[]; mode?: unknown };
   if (!Array.isArray(body.messages)) {
     return Response.json({ error: "messages required" }, { status: HTTP_BAD_REQUEST });
   }
 
   try {
-    return await chatResponse(Number(id), body.messages);
+    return await chatResponse(Number(id), body.messages, body.mode);
   } catch (e) {
     if (e instanceof InputError) {
       return Response.json({ error: e.message }, { status: HTTP_BAD_REQUEST });

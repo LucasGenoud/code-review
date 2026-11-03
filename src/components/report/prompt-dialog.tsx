@@ -109,8 +109,9 @@ export function PromptMenu({ units }: { units: UnitView[] }) {
 }
 
 // "Bugs · part 2".
+// "Bugs · Refund flow" for a group, "Rules · part 2" for a file chunk.
 function unitLabel(u: UnitView): string {
-  return `${u.pass} · part ${u.chunk + 1}`;
+  return `${u.pass} · ${u.title ?? `part ${u.chunk + 1}`}`;
 }
 
 function CopyButton({ text }: { text: string }) {

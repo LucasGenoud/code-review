@@ -63,7 +63,9 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
             ← Projects
           </Link>
           <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
-          <p className="truncate font-mono text-xs text-muted-foreground">{project.path}</p>
+          <p dir="rtl" className="truncate text-left font-mono text-xs text-muted-foreground" title={project.path}>
+            <bdi>{project.path}</bdi>
+          </p>
         </div>
         <div className="flex gap-2">
           {!noModel && (

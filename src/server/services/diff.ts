@@ -3,6 +3,7 @@ import { z } from "zod";
 import { DiffMode } from "@/lib/domain";
 import { readBytes } from "@/server/drivers/fs";
 import {
+  changedBetween,
   diff,
   EMPTY_TREE,
   mergeBase,
@@ -10,6 +11,7 @@ import {
   showFile,
   trackedFiles,
   untrackedFiles,
+  type ChangedFile,
 } from "@/server/drivers/git";
 import { addedFilePatch, parseDiff, type ParsedFile } from "./diffParse";
 import { InputError } from "./errors";
@@ -97,6 +99,17 @@ export async function loadChanges(dir: string, source: DiffSource, r: Resolved):
 
   const files = await loadDiff(dir, r);
   return source.paths ? files.filter((f) => inScope(f.path, source.paths ?? [])) : files;
+}
+
+// Files a commit range changes, for picking what its review covers.
+// e.g. last_commit → [{ path: "src/a.ts", change: "modified" }]
+export async function rangeFiles(dir: string, source: DiffSource): Promise<ChangedFile[]> {
+  const r = await resolveSource(dir, source);
+  if (!r.headSha) {
+    throw new InputError("Not a commit range");
+  }
+
+  return changedBetween(dir, r.baseSha, r.headSha);
 }
 
 // Tracked and untracked files, ignored ones left out.

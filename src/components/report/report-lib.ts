@@ -113,6 +113,42 @@ export function isFinished(u: UnitView): boolean {
   return u.status === UnitStatus.Done || u.status === UnitStatus.Failed;
 }
 
+// Units that review a file, alone or in a group.
+export function unitsOfFile(units: UnitView[], fileId: number): UnitView[] {
+  return units.filter((u) => u.fileIds.includes(fileId));
+}
+
+// Where a file stands in a running review, from its units.
+export enum FileProgress {
+  Reviewing = "reviewing",
+  Queued = "queued",
+  Done = "done",
+}
+
+export function fileProgress(units: UnitView[]): FileProgress | null {
+  if (units.length === 0) {
+    return null;
+  }
+
+  if (units.some((u) => u.status === UnitStatus.Running)) {
+    return FileProgress.Reviewing;
+  }
+
+  return units.some((u) => u.status === UnitStatus.Pending) ? FileProgress.Queued : FileProgress.Done;
+}
+
+// "Refund flow", else the files' names: "pay.ts", "pay.ts + 2 files".
+export function unitName(u: UnitView, paths: Map<number, string>): string {
+  if (u.title) {
+    return u.title;
+  }
+
+  const first = splitPath(paths.get(u.fileIds[0]) ?? "?").name;
+  const more = u.fileIds.length - 1;
+  const part = u.chunk > 0 ? ` (part ${u.chunk + 1})` : "";
+  return more > 0 ? `${first} + ${more} ${more === 1 ? "file" : "files"}` : `${first}${part}`;
+}
+
 // DOM ids used to scroll to a file or an inline finding.
 export function fileAnchor(fileId: number): string {
   return `file-${fileId}`;

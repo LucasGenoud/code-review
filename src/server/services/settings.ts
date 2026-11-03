@@ -92,14 +92,16 @@ export function saveSettings(input: AppSettings): void {
 
 // In pipeline order, as Settings lists them.
 const PROMPT_INFO: { key: PromptKey; label: string; help: string }[] = [
-  { key: PromptKey.Overview, label: "Change overview", help: "One call per review: summarizes the whole change for the per-file passes." },
-  { key: PromptKey.Review, label: "Review", help: "Base instructions of every per-file pass. The JSON format is appended automatically." },
+  { key: PromptKey.Overview, label: "Review plan", help: "One call per review: writes the change overview and groups related files to review together. The JSON format is appended automatically." },
+  { key: PromptKey.Review, label: "Review", help: "Base instructions of every unit (a file or a group of files). The JSON format is appended automatically." },
   { key: PromptKey.Bugs, label: "Bugs pass", help: "Added to Review for the built-in Bugs category." },
   { key: PromptKey.Rules, label: "Rules pass", help: "Added to Review for rule categories." },
   { key: PromptKey.Lookup, label: "Usage lookup", help: "Before the bugs pass: names what the diff changes, so its usages in other files can be shown." },
   { key: PromptKey.Usages, label: "Usages", help: "Added to the bugs pass when usages in other files were found." },
+  { key: PromptKey.Agent, label: "Review agent", help: "Added to the bugs pass of models with tool calling: how to explore the repository before reporting." },
   { key: PromptKey.Describe, label: "Project description", help: "Drafts a project's description from its README, manifests and file tree." },
   { key: PromptKey.RuleChanges, label: "Rule changes", help: "Turns dismissed findings into proposed rule edits." },
+  { key: PromptKey.Conclusion, label: "Review summary", help: "One call when a review finishes: recaps its open findings." },
 ];
 
 export type PromptView = { key: PromptKey; label: string; help: string; text: string; defaultText: string };

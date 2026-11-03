@@ -15,6 +15,8 @@ import {
   undoFix,
   type Finding,
   type Report,
+  type ReviewProgress,
+  type UnitView,
 } from "@/app/reviews/actions";
 import { ChatSheet, type ChatHandle } from "@/components/chat/chat-sheet";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -24,10 +26,21 @@ import { FindingStatus, ReviewStatus } from "@/lib/domain";
 import { FileDiff } from "./file-diff";
 import { FileList } from "./file-list";
 import { FindingsPanel } from "./findings-panel";
+import { LiveActivity } from "./live-activity";
 import { ReportContext } from "./report-context";
 import { ReportHeader } from "./report-header";
 import { Grow, ResizeHandle } from "./resize-handle";
-import { DEFAULT_FILTERS, fileAnchor, findingAnchor, listAnchor, matchesScope, matchesStatus, sortFindings } from "./report-lib";
+import { ReviewSummary } from "./review-summary";
+import {
+  DEFAULT_FILTERS,
+  fileAnchor,
+  findingAnchor,
+  listAnchor,
+  matchesScope,
+  matchesStatus,
+  sortFindings,
+  unitsOfFile,
+} from "./report-lib";
 import { ShortcutsDialog } from "./shortcuts-dialog";
 
 const CHAT_STARTERS = [
@@ -39,10 +52,11 @@ const CHAT_STARTERS = [
 
 // Review report: header, file list | diffs with inline findings | findings
 // panel, plus the chat sheet. Owns filters, selection, optimistic finding
-// statuses, polling while the review runs, and keyboard shortcuts.
+// statuses, live progress while the review runs, and keyboard shortcuts.
 //
 //   ┌──────────────── header: meta, progress, actions ───────────────┐
-//   │ files (lg+) │ overview + diffs, cards inline │ findings (xl+)  │
+//   │ files (lg+) │ summary, overview, diffs with  │ findings (xl+)  │
+//   │             │ cards inline                   │                 │
 //   └─────────────┴─────────────────────────────────┴─────────────────┘
 
 const POLL_MS = 1500;
@@ -69,10 +83,11 @@ type Props = {
   canVerify: boolean;
 };
 
-export function ReportView({ report, chat, canVerify }: Props) {
-  const router = useRouter();
-  const reviewId = report.review.id;
-  const running = report.running || report.review.status === ReviewStatus.Running;
+export function ReportView({ report: loaded, chat, canVerify }: Props) {
+  const reviewId = loaded.review.id;
+  const running = loaded.running || loaded.review.status === ReviewStatus.Running;
+  const units = useLiveUnits(loaded, running);
+  const report = { ...loaded, units };
   const theme = useDiffTheme();
 
   // Lookups from the rules snapshot the review ran with.
@@ -86,7 +101,6 @@ export function ReportView({ report, chat, canVerify }: Props) {
   const [busy, markBusy] = useOptimistic<number[], number>([], (state, id) => [...state, id]);
   const [, startTransition] = useTransition();
   const [refreshing, startRefresh] = useTransition();
-  const [polling, startPoll] = useTransition();
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -106,18 +120,6 @@ export function ReportView({ report, chat, canVerify }: Props) {
     categories,
   );
   const openCount = findings.filter((f) => f.status === FindingStatus.Open).length;
-
-  // Poll server data while the review runs: findings appear progressively.
-  // Next poll waits for the last: large reports take longer than POLL_MS to
-  // load, and a fixed interval would abort each refresh before it lands.
-  useEffect(() => {
-    if (!running || polling) {
-      return;
-    }
-
-    const timer = setTimeout(() => startPoll(() => router.refresh()), POLL_MS);
-    return () => clearTimeout(timer);
-  }, [running, polling, router]);
 
   // End the highlight pulse.
   useEffect(() => {
@@ -317,6 +319,7 @@ export function ReportView({ report, chat, canVerify }: Props) {
           onOpenFindings={() => setPanelOpen(true)}
           openCount={openCount}
         />
+        {running && <LiveActivity units={units} files={report.files} />}
 
         <div
           className="relative grid min-h-0 flex-1 lg:grid-cols-[var(--files-w)_minmax(0,1fr)] xl:grid-cols-[var(--files-w)_minmax(0,1fr)_var(--findings-w)]"
@@ -348,6 +351,7 @@ export function ReportView({ report, chat, canVerify }: Props) {
           </aside>
 
           <main className="min-h-0 overflow-y-auto bg-card" aria-label="Diff">
+            <ReviewSummary report={report} findings={findings} running={running} onCite={select} />
             <Overview summary={report.review.summary} running={running} />
             {report.files.length === 0 ? (
               <NoChanges running={running} />
@@ -356,7 +360,7 @@ export function ReportView({ report, chat, canVerify }: Props) {
                 <FileDiff
                   key={file.id}
                   file={file}
-                  units={report.units.filter((u) => u.fileId === file.id)}
+                  units={unitsOfFile(units, file.id)}
                   findings={scoped.filter((f) => f.fileId === file.id)}
                   theme={theme}
                 />
@@ -394,6 +398,72 @@ export function ReportView({ report, chat, canVerify }: Props) {
       <ShortcutsDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </ReportContext>
   );
+}
+
+// Unit states of a running review, polled from the progress route. The
+// full report reloads only when its version changes (new findings, files
+// done, summaries written): diffs stay still while units progress.
+//
+//   poll ─► same version ─► update units only
+//        └► new version  ─► router.refresh() ─► new report, same version
+//
+// Polled units are used only while they match the loaded report's
+// version, so a report loaded by an action (e.g. Retry) wins over them.
+function useLiveUnits(report: Report, running: boolean): UnitView[] {
+  const router = useRouter();
+  const [progress, setProgress] = useState<ReviewProgress | null>(null);
+  const [reloading, startReload] = useTransition();
+  const version = useRef(report.version);
+  const busy = useRef(false);
+  const reviewId = report.review.id;
+
+  useEffect(() => {
+    version.current = report.version;
+    busy.current = reloading;
+  });
+
+  useEffect(() => {
+    if (!running) {
+      return;
+    }
+
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    // Next poll waits for the last: a slow response never piles up.
+    async function tick() {
+      const next = await fetchProgress(reviewId);
+      if (stopped) {
+        return;
+      }
+
+      if (next) {
+        setProgress(next);
+        if (next.version !== version.current && !busy.current) {
+          startReload(() => router.refresh());
+        }
+      }
+
+      timer = setTimeout(tick, POLL_MS);
+    }
+
+    timer = setTimeout(tick, POLL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [running, reviewId, router]);
+
+  return progress && progress.version === report.version ? progress.units : report.units;
+}
+
+async function fetchProgress(reviewId: number): Promise<ReviewProgress | null> {
+  try {
+    const res = await fetch(`/api/reviews/${reviewId}/progress`, { cache: "no-store" });
+    return res.ok ? ((await res.json()) as ReviewProgress) : null;
+  } catch {
+    return null;
+  }
 }
 
 // "Change overview" from the review's overview pass.

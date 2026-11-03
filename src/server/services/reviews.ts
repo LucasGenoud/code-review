@@ -15,22 +15,25 @@ import { readBytes, writeText } from "@/server/drivers/fs";
 import { projectById } from "@/server/drivers/projectStore";
 import {
   deleteReview,
+  fileCounts,
   filesForReview,
   findingById,
   findingsForFile,
   findingsForReview,
+  findingStats,
   reviewById,
   reviewsForProject,
   unitById,
   unitsForReview,
   updateFinding,
 } from "@/server/drivers/reviewStore";
-import type { Finding, Review, ReviewFile } from "@/server/drivers/schema";
+import type { Finding, Review, ReviewFile, ReviewUnit } from "@/server/drivers/schema";
 import { InputError } from "./errors";
 import { isInside } from "./paths";
 import { tokenCost } from "./providers";
 import { isRunning } from "./review/engine";
 import { locate, replaceQuote } from "./review/locate";
+import { unitFileIds } from "./review/units";
 import type { RulesSnapshot } from "./rules";
 
 export type { Finding, Review, ReviewFile, RulesSnapshot };
@@ -43,7 +46,13 @@ export type ReviewSummary = Review & {
 
 export type UnitView = {
   id: number;
-  fileId: number;
+  // Every file the unit reviews; one, or a group of related files.
+  fileIds: number[];
+  // Grouped units: e.g. "Refund flow" / "Refund sign flips; check callers".
+  title: string | null;
+  focus: string | null;
+  // What its agent is doing, e.g. "Reading src/pay.ts:40-90".
+  activity: string | null;
   pass: string;
   chunk: number;
   status: UnitStatus;
@@ -61,6 +70,18 @@ export type Report = {
   units: UnitView[];
   running: boolean;
   undoableFixes: number[];
+  // See ReviewProgress.version.
+  version: string;
+};
+
+// What the report polls while a review runs: unit states for the live
+// progress, and a version that changes when findings, file states or the
+// summaries change, i.e. when the full report is worth reloading.
+export type ReviewProgress = {
+  running: boolean;
+  status: ReviewStatus;
+  units: UnitView[];
+  version: string;
 };
 
 // Paths named in a review label; the rest are counted.
@@ -117,19 +138,45 @@ export function getReport(reviewId: number): Report {
     rules: JSON.parse(review.rules),
     files: filesForReview(reviewId),
     findings,
-    units: unitsForReview(reviewId).map((u) => ({
-      id: u.id,
-      fileId: u.fileId,
-      pass: u.pass,
-      chunk: u.chunk,
-      status: u.status,
-      error: u.error,
-      inputTokens: u.inputTokens,
-      outputTokens: u.outputTokens,
-    })),
+    units: unitsForReview(reviewId).map(unitView),
     running: isRunning(reviewId),
     undoableFixes: undoableFixes(reviewId),
+    version: reportVersion(review),
   };
+}
+
+export function reviewProgress(reviewId: number): ReviewProgress {
+  const review = requireReview(reviewId);
+  return {
+    running: isRunning(reviewId),
+    status: review.status,
+    units: unitsForReview(reviewId).map(unitView),
+    version: reportVersion(review),
+  };
+}
+
+function unitView(u: ReviewUnit): UnitView {
+  return {
+    id: u.id,
+    fileIds: unitFileIds(u),
+    title: u.title,
+    focus: u.focus,
+    activity: u.activity,
+    pass: u.pass,
+    chunk: u.chunk,
+    status: u.status,
+    error: u.error,
+    inputTokens: u.inputTokens,
+    outputTokens: u.outputTokens,
+  };
+}
+
+// e.g. "running|12:340|3/9|412|0". Unit progress is left out: it is
+// polled on its own and must not reload every diff.
+function reportVersion(review: Review): string {
+  const { count, maxId } = findingStats(review.id);
+  const files = fileCounts(review.id, FileState.Reviewed);
+  return [review.status, `${count}:${maxId}`, `${files.inState}/${files.total}`, review.summary.length, review.conclusion.length].join("|");
 }
 
 // Exact prompt a unit sent, for the prompt preview.
@@ -356,6 +403,10 @@ export function exportMarkdown(reviewId: number): { filename: string; markdown: 
     `- Files: ${report.files.length - skipped} reviewed, ${skipped} skipped`,
     "",
   ];
+
+  if (review.conclusion) {
+    lines.push("## Verdict", "", review.conclusion, "");
+  }
 
   if (review.summary) {
     lines.push("## Summary", "", review.summary, "");

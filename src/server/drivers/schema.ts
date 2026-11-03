@@ -165,6 +165,8 @@ export const reviews = sqliteTable("reviews", {
   error: text("error"),
   // Overview pass output, shared with every unit prompt.
   summary: text("summary").notNull().default(""),
+  // Markdown recap of the findings, written once the review is done.
+  conclusion: text("conclusion").notNull().default(""),
   // JSON RulesSnapshot: rules as they were when the review ran.
   rules: text("rules").notNull(),
   inputTokens: integer("input_tokens").notNull().default(0),
@@ -200,8 +202,17 @@ export const reviewUnits = sqliteTable("review_units", {
   // JSON number[]: categories reviewed in this pass.
   categoryIds: text("category_ids").notNull(),
   chunk: integer("chunk").notNull().default(0),
-  // JSON number[]: indexes of the file's hunks in this chunk.
+  // JSON number[]: indexes of the file's hunks in this chunk. Grouped
+  // units: JSON { [fileId]: number[] }, e.g. {"4":[0,1],"9":[0]}.
   hunks: text("hunks").notNull(),
+  // JSON number[]: every file of a grouped unit; null = [fileId].
+  fileIds: text("file_ids"),
+  // Grouped units: the planner's name and what to check, e.g.
+  // "Refund flow" / "Refund amount sign flips; callers compare it".
+  title: text("title"),
+  focus: text("focus"),
+  // What the unit's agent is doing now, e.g. "Reading src/pay.ts:40-90".
+  activity: text("activity"),
   status: text("status", { enum: values(UnitStatus) }).notNull().$type<UnitStatus>(),
   error: text("error"),
   // Exact prompt sent, for the prompt preview.

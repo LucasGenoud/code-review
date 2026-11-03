@@ -178,6 +178,26 @@ export async function changedFiles(dir: string): Promise<ChangedFile[]> {
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+// Files changed from `base` to `head`. Cheaper than a full diff: names only.
+//   "M\0a.ts\0R100\0old.ts\0new.ts\0" ← renames carry source and target
+export async function changedBetween(dir: string, base: string, head: string): Promise<ChangedFile[]> {
+  const out = await git(dir, ["diff", "--name-status", "-z", "--find-renames", "--end-of-options", base, head, "--"]);
+  const entries = out.split("\0").filter(Boolean);
+  const files: ChangedFile[] = [];
+
+  for (let i = 0; i < entries.length; i++) {
+    const letter = entries[i][0];
+    if (letter === "R" || letter === "C") {
+      i++;
+    }
+
+    i++;
+    files.push({ path: entries[i], change: STATUS_CHANGE[letter] ?? FileChange.Modified });
+  }
+
+  return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
 export async function trackedFiles(dir: string): Promise<string[]> {
   const out = await git(dir, ["ls-files", "-z"]);
   return out.split("\0").filter(Boolean);
@@ -192,30 +212,38 @@ export async function showFile(dir: string, sha: string, file: string): Promise<
   }
 }
 
-// `git grep` over tracked files. Returns "path:line:text" lines.
-export async function grep(dir: string, pattern: string, glob?: string): Promise<string> {
-  const args = ["grep", "-n", "-I", "-E", "-e", pattern];
+// Lines mentioning `word` as a whole word at commit `sha`, or in the working
+// tree (untracked files included) when null. Returns "path:line:text" lines,
+// with `context` surrounding lines as "path-line-text" and "--" between groups.
+// glob: optional pathspec, e.g. "*.py".
+export async function wordUsages(dir: string, word: string, sha: string | null, context: number, glob?: string): Promise<string> {
+  const where = sha ? [sha] : ["--untracked"];
+  const args = ["grep", "-n", "-I", "-w", "-F", `-C${context}`, "-e", word, ...where];
   if (glob) {
     args.push("--", glob);
   }
 
-  return git(dir, args, ExitPolicy.AllowNoMatch);
-}
-
-// Lines mentioning `word` as a whole word at commit `sha`, or in the working
-// tree (untracked files included) when null. Returns "path:line:text" lines,
-// with `context` surrounding lines as "path-line-text" and "--" between groups.
-export async function wordUsages(dir: string, word: string, sha: string | null, context: number): Promise<string> {
-  const where = sha ? [sha] : ["--untracked"];
-  const args = ["grep", "-n", "-I", "-w", "-F", `-C${context}`, "-e", word, ...where];
   return withoutSha(await git(dir, args, ExitPolicy.AllowNoMatch), sha);
 }
 
+export type GrepOptions = {
+  // Pathspec, e.g. "*.py" or "src/**/*.ts".
+  glob?: string;
+  // Lines around each match, as "path-line-text" with "--" between groups.
+  context?: number;
+  ignoreCase?: boolean;
+};
+
 // Lines matching the extended regex `pattern` at commit `sha`, or in the
 // working tree (untracked files included) when null. "path:line:text" lines.
-export async function grepAt(dir: string, pattern: string, sha: string | null): Promise<string> {
+export async function grepAt(dir: string, pattern: string, sha: string | null, opts: GrepOptions = {}): Promise<string> {
   const where = sha ? [sha] : ["--untracked"];
-  const args = ["grep", "-n", "-I", "-E", "-e", pattern, ...where];
+  const flags = [...(opts.ignoreCase ? ["-i"] : []), ...(opts.context ? [`-C${opts.context}`] : [])];
+  const args = ["grep", "-n", "-I", "-E", ...flags, "-e", pattern, ...where];
+  if (opts.glob) {
+    args.push("--", opts.glob);
+  }
+
   return withoutSha(await git(dir, args, ExitPolicy.AllowNoMatch), sha);
 }
 

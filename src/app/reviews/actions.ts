@@ -10,7 +10,7 @@ import { attempt } from "../result";
 // Review report API: report data, review control and finding actions.
 // Chat streaming and Markdown export are route handlers under /api/reviews.
 
-export type { Finding, Report, ReviewFile, RulesSnapshot, UnitView } from "@/server/services/reviews";
+export type { Finding, Report, ReviewFile, ReviewProgress, RulesSnapshot, UnitView } from "@/server/services/reviews";
 
 export async function getReport(id: number) {
   await connection();
@@ -42,6 +42,13 @@ export async function retryReview(id: number) {
 // Re-reads the diff from disk (e.g. after local edits).
 export async function refreshReview(id: number) {
   const result = await attempt(() => engine.refreshReview(id));
+  refresh();
+  return result;
+}
+
+// Rewrites the review summary from the current findings. Takes seconds.
+export async function summarizeReview(id: number) {
+  const result = await attempt(() => engine.summarizeReview(id));
   refresh();
   return result;
 }

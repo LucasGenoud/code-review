@@ -85,7 +85,10 @@ async function ProjectRow({ project }: { project: Project }) {
         >
           {project.name}
         </Link>
-        <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{project.path}</p>
+        {/* rtl: a long path is cut at its start, keeping the repository name visible. */}
+        <p dir="rtl" className="mt-1 truncate text-left font-mono text-xs text-muted-foreground" title={project.path}>
+          <bdi>{project.path}</bdi>
+        </p>
       </div>
 
       <div className="hidden shrink-0 items-center gap-2 text-xs text-muted-foreground sm:flex">

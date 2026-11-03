@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useImperativeHandle, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
-import { ArrowDown, ArrowUp, CornerDownRight, RotateCcw, Square } from "lucide-react";
-import { toast } from "sonner";
+import { ArrowDown, ArrowUp, CornerDownRight, ListPlus, RotateCcw, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
-import { ChatStop, type ChatMetadata } from "@/lib/chat";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { CHAT_MODES, ChatMode, ChatStop, type ChatMetadata } from "@/lib/chat";
 import { ChatMessage } from "./chat-message";
 
 // A conversation and its composer, without chrome. Used in the review
@@ -17,15 +18,22 @@ import { ChatMessage } from "./chat-message";
 //   ┌ messages (scrolls, sticks to the bottom while streaming) ┐
 //   │ stop notice: "hit the output limit" [Continue]            │
 //   │                    [↓ Latest] (when scrolled up)          │
+//   ├ queue: messages sent while answering, sent in order  [×] ─┤
 //   ├ composer ─────────────────────────────────────────────────┤
-//   │ hints                                  footer (e.g. meter)│
+//   │ [Ask|Debug|Find bugs|Plan]             footer (e.g. meter)│
 //   └───────────────────────────────────────────────────────────┘
+//
+// Sending while an answer streams queues the message; each queued message
+// goes out when the previous answer ends. An error pauses the queue.
 
 const NO_FINDINGS = new Set<number>();
 // Within this many pixels of the bottom counts as at the bottom. Small, so a
 // short scroll up while streaming isn't undone by the next token.
 const STICK_DISTANCE_PX = 8;
 const CONTINUE_PROMPT = "Continue where you stopped.";
+const MODES = Object.values(ChatMode);
+
+type Queued = { id: number; text: string; mode: ChatMode };
 
 // Lets the parent prefill or send a message, e.g. from a finding's "Ask".
 export type ChatHandle = {
@@ -94,18 +102,23 @@ export function ChatPanel(props: Props) {
   });
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [mode, setMode] = useState(ChatMode.Ask);
+  const [queue, setQueue] = useState<Queued[]>([]);
+  const queueId = useRef(0);
   const ownInputRef = useRef<HTMLTextAreaElement>(null);
   const inputRef = props.inputRef ?? ownInputRef;
   const { scrollRef, contentRef, onScroll, pinned, follow, jumpToLatest } = useStickToBottom();
   const busy = sending || status === "submitted" || status === "streaming";
 
-  async function send(text: string) {
+  // mode: the queued message's, else the selected one.
+  async function send(text: string, as: ChatMode = mode) {
     if (!text.trim()) {
       return;
     }
 
     if (busy) {
-      toast.info("Wait for the current answer, or stop it");
+      setQueue((q) => [...q, { id: ++queueId.current, text: text.trim(), mode: as }]);
+      setDraft("");
       return;
     }
 
@@ -116,11 +129,36 @@ export function ChatPanel(props: Props) {
       }
 
       follow();
-      void sendMessage({ text: text.trim() });
-      setDraft("");
+      void sendMessage({ text: text.trim() }, { body: { mode: as } });
+      setDraft((d) => (d.trim() === text.trim() ? "" : d));
     } finally {
       setSending(false);
     }
+  }
+
+  // Next queued message once the answer ended; errors wait for Retry.
+  const sendNext = useEffectEvent(() => {
+    const [next, ...rest] = queue;
+    setQueue(rest);
+    void send(next.text, next.mode);
+  });
+
+  useEffect(() => {
+    if (busy || error || queue.length === 0) {
+      return;
+    }
+
+    // After the commit that ended the answer, so useChat is ready again.
+    const timer = setTimeout(sendNext, 0);
+    return () => clearTimeout(timer);
+  }, [busy, error, queue.length]);
+
+  // Takes a queued message back into the composer to edit it.
+  function unqueue(item: Queued) {
+    setQueue((q) => q.filter((x) => x.id !== item.id));
+    setDraft(item.text);
+    setMode(item.mode);
+    inputRef.current?.focus();
   }
 
   useImperativeHandle(ref, () => ({
@@ -183,6 +221,10 @@ export function ChatPanel(props: Props) {
         )}
       </div>
 
+      {queue.length > 0 && (
+        <QueueList queue={queue} onEdit={unqueue} onRemove={(item) => setQueue((q) => q.filter((x) => x.id !== item.id))} />
+      )}
+
       <form
         className="border-t p-3"
         onSubmit={(e) => {
@@ -204,28 +246,87 @@ export function ChatPanel(props: Props) {
                 }
               }}
               rows={1}
-              placeholder={placeholder}
+              placeholder={mode === ChatMode.Ask ? placeholder : CHAT_MODES[mode].placeholder}
               aria-label="Message"
               className="max-h-40 min-h-8 resize-none border-0 bg-transparent px-1.5 py-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
-            {busy ? (
+            {busy && (
               <Button type="button" size="icon-sm" variant="outline" onClick={stopAnswer} aria-label="Stop answer">
                 <Square />
               </Button>
-            ) : (
-              <Button type="submit" size="icon-sm" disabled={!draft.trim()} aria-label="Send">
-                <ArrowUp />
+            )}
+            {busy && draft.trim() ? (
+              <Button type="submit" size="icon-sm" variant="secondary" aria-label="Queue message">
+                <ListPlus />
               </Button>
+            ) : (
+              !busy && (
+                <Button type="submit" size="icon-sm" disabled={!draft.trim()} aria-label="Send">
+                  <ArrowUp />
+                </Button>
+              )
             )}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1">
-            <p className="text-[11px] text-muted-foreground">
-              <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> for a new line
+            <ModePicker mode={mode} onChange={setMode} />
+            <p className="hidden text-[11px] text-muted-foreground sm:block">
+              <Kbd>Enter</Kbd> to {busy ? "queue" : "send"} · <Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> new line
             </p>
             {footer?.({ messages, busy, replace: setMessages })}
           </div>
         </div>
       </form>
+    </div>
+  );
+}
+
+// Picks what the next message is for; each mode has its own instructions.
+function ModePicker({ mode, onChange }: { mode: ChatMode; onChange: (mode: ChatMode) => void }) {
+  return (
+    <ToggleGroup
+      size="sm"
+      spacing={0}
+      value={[mode]}
+      onValueChange={(values) => values[0] && onChange(values[0] as ChatMode)}
+      aria-label="Chat mode"
+      className="rounded-md border"
+    >
+      {MODES.map((m) => (
+        <Tooltip key={m}>
+          <TooltipTrigger render={<ToggleGroupItem value={m} className="h-6 px-2 text-[11px]" />}>{CHAT_MODES[m].label}</TooltipTrigger>
+          <TooltipContent>{CHAT_MODES[m].hint}</TooltipContent>
+        </Tooltip>
+      ))}
+    </ToggleGroup>
+  );
+}
+
+// Messages waiting for the current answer. Click one to edit it.
+function QueueList({ queue, onEdit, onRemove }: { queue: Queued[]; onEdit: (q: Queued) => void; onRemove: (q: Queued) => void }) {
+  return (
+    <div className="border-t bg-muted/30 px-3 py-2" aria-label="Queued messages">
+      <p className="mb-1 text-[11px] text-muted-foreground">Queued · sent in order after the current answer</p>
+      <ol className="flex flex-col gap-1">
+        {queue.map((item, i) => (
+          <li key={item.id} className="flex items-center gap-2 text-xs">
+            <span className="w-4 shrink-0 text-right text-muted-foreground tabular-nums">{i + 1}</span>
+            {item.mode !== ChatMode.Ask && (
+              <span className="shrink-0 rounded bg-muted px-1.5 text-[10px] font-medium">{CHAT_MODES[item.mode].label}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => onEdit(item)}
+              title="Edit"
+              className="min-w-0 flex-1 truncate text-left outline-none hover:underline focus-visible:underline"
+            >
+              {item.text}
+            </button>
+            <Button type="button" size="icon-xs" variant="ghost" onClick={() => onRemove(item)} aria-label="Remove from queue">
+              <X />
+            </Button>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

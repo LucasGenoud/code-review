@@ -1,5 +1,5 @@
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
-import { FindingStatus, ReviewStatus, UnitStatus } from "@/lib/domain";
+import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { FileState, FindingStatus, ReviewStatus, UnitStatus } from "@/lib/domain";
 import { getDb } from "./db";
 import {
   findings,
@@ -82,6 +82,16 @@ export function filesForReview(reviewId: number): ReviewFile[] {
     .all();
 }
 
+// Files of a review in `state`, and in total, without loading patches.
+export function fileCounts(reviewId: number, state: FileState): { inState: number; total: number } {
+  const row = getDb()
+    .select({ inState: sql<number>`coalesce(sum(${reviewFiles.state} = ${state}), 0)`, total: sql<number>`count(*)` })
+    .from(reviewFiles)
+    .where(eq(reviewFiles.reviewId, reviewId))
+    .get();
+  return { inState: row?.inState ?? 0, total: row?.total ?? 0 };
+}
+
 export function fileById(id: number): ReviewFile | undefined {
   return getDb().select().from(reviewFiles).where(eq(reviewFiles.id, id)).get();
 }
@@ -121,8 +131,10 @@ export function updateUnit(id: number, patch: Partial<UnitInput>): void {
   getDb().update(reviewUnits).set(patch).where(eq(reviewUnits.id, id)).run();
 }
 
+// Units reviewing the file, alone or in a group.
 export function deleteUnitsForFile(fileId: number): void {
-  getDb().delete(reviewUnits).where(eq(reviewUnits.fileId, fileId)).run();
+  const inGroup = sql`exists (select 1 from json_each(${reviewUnits.fileIds}) where value = ${fileId})`;
+  getDb().delete(reviewUnits).where(or(eq(reviewUnits.fileId, fileId), inGroup)).run();
 }
 
 // Units left `running` by a crash or cancel go back to the queue.
@@ -159,6 +171,17 @@ export function findingsForReview(reviewId: number): Finding[] {
     .where(eq(findings.reviewId, reviewId))
     .orderBy(asc(findings.path), asc(findings.startLine))
     .all();
+}
+
+// Count and newest id, e.g. { count: 12, maxId: 340 }: changes whenever
+// findings are added or dropped. Cheap enough to poll.
+export function findingStats(reviewId: number): { count: number; maxId: number } {
+  const row = getDb()
+    .select({ count: sql<number>`count(*)`, maxId: sql<number>`coalesce(max(${findings.id}), 0)` })
+    .from(findings)
+    .where(eq(findings.reviewId, reviewId))
+    .get();
+  return { count: row?.count ?? 0, maxId: row?.maxId ?? 0 };
 }
 
 export function findingsForFile(fileId: number): Finding[] {

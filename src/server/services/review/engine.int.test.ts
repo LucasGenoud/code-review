@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { UIMessage } from "ai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ChatMode } from "@/lib/chat";
 import { ChangeScope, DiffMode, FileState, FindingStatus, ProviderKind, ReviewStatus, UnitStatus } from "@/lib/domain";
 
 // End to end: real git repo + mock LLM server (scripts/mock-llm.mjs) through
@@ -108,11 +109,13 @@ describe("review pipeline", () => {
     let report = reviews.getReport(reviewId);
     expect(report.review.status).toBe(ReviewStatus.Done);
     expect(report.review.summary).toContain("Mock overview");
+    expect(report.review.conclusion).toMatch(/^Mock summary: fix \d+ finding/);
     expect(report.files.map((f) => f.path)).toEqual(["app.py", "new.py"]);
     expect(report.files.every((f) => f.state === FileState.Reviewed)).toBe(true);
     expect(report.units.every((u) => u.status === UnitStatus.Done)).toBe(true);
-    // Bugs pass + rules pass (Python pack) per file.
-    expect(report.units).toHaveLength(4);
+    // Both files in one planned group: bugs pass + rules pass (Python pack).
+    expect(report.units).toHaveLength(2);
+    expect(report.units.every((u) => u.fileIds.length === 2 && u.title === "Mock group root")).toBe(true);
     expect(report.findings.length).toBeGreaterThan(0);
     expect(report.review.cost).toBeGreaterThan(0);
 
@@ -137,7 +140,7 @@ describe("review pipeline", () => {
 
     // Chat answer is streamed and persisted.
     const question: UIMessage = { id: "u1", role: "user", parts: [{ type: "text", text: "Why #1?" }] };
-    const response = await chat.chatResponse(reviewId, [question]);
+    const response = await chat.chatResponse(reviewId, [question], ChatMode.Debug);
     await response.text();
     await sleep(POLL_MS);
     expect(chat.loadChat(reviewId)).toHaveLength(2);

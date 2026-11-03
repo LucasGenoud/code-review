@@ -6,6 +6,13 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "mock-llm",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/mock-llm.mjs", "4010"],
+      "port": 4010,
+      "url": "http://localhost:4010"
     }
   ]
 }

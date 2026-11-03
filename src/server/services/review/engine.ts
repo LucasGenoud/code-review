@@ -8,11 +8,12 @@ import {
   FileState,
   FindingStatus,
   ReviewStatus,
+  ruleKey,
   SEVERITY_RANK,
   UnitStatus,
 } from "@/lib/domain";
 import { wordUsages } from "@/server/drivers/git";
-import { generateObject, generatePlain, type Usage } from "@/server/drivers/llm";
+import { generateAgentObject, generateObject, generatePlain, type Usage } from "@/server/drivers/llm";
 import { undoableFixes } from "@/server/drivers/fixStore";
 import { projectById } from "@/server/drivers/projectStore";
 import {
@@ -23,6 +24,7 @@ import {
   fileById,
   filesForReview,
   findingsForFile,
+  findingsForReview,
   insertFiles,
   insertFindings,
   insertReview,
@@ -50,42 +52,64 @@ import {
   type PastedFile,
   type Resolved,
 } from "../diff";
-import { parseDiff, type Hunk, type ParsedFile } from "../diffParse";
+import { parseDiff, type ParsedFile } from "../diffParse";
 import { InputError } from "../errors";
 import { resolveModel, type ResolvedModel } from "../providers";
+import { repoMap, repoTools, ToolScope } from "../repoTools";
 import { effectiveRules, splitGlobs, type RulesSnapshot } from "../rules";
 import { getSettings } from "../settings";
 import { locate } from "./locate";
 import { modelLimiter } from "./limiter";
 import {
+  conclusionPrompt,
   findingsSchema,
   hunkTokens,
   lookupPrompt,
   lookupSchema,
+  MAX_GROUP_FILES,
   MAX_LOOKUPS,
-  overviewPrompt,
   PassKind,
+  planPrompt,
+  planSchema,
   unitOverhead,
   unitPrompt,
   type FindingDraft,
+  type UnitFile,
 } from "./prompts";
+import { unitFileIds, unitHunks } from "./units";
 
-// Review pipeline:
+// Review pipeline: an orchestrator plans, units review in parallel, the
+// bugs units being agents that explore the repository.
 //
-//   start ─► diff ─► files (skip binary/deleted/ignored) ─► units
-//                                                            │
-//   run: overview pass (1 call) ─► units in parallel (≤ model concurrency)
-//        each unit = file chunk × pass, its findings saved as it finishes
-//        ─► dedupe per file ─► status
+//   start ─► diff ─► files (skip binary/deleted/ignored)
+//
+//   run: plan (1 call, the orchestrator): overview + groups of files that
+//        interact, each with a focus ─► units = group × pass, split to fit
+//        └ plan fails → groups by directory
+//      ─► units in parallel (≤ model concurrency), findings saved as each ends
+//           bugs pass + tool calling: agent, reads callers, callees, types
+//           else: one call with the group's diffs (+ grepped usages for bugs)
+//      ─► dedupe per file ─► conclusion (1 call, when all units are done)
+//      ─► status
 //
 // Units persist, so cancel, crash or failure resume with only what's left.
+// Files without units (new review, re-review) are planned on the next run.
 
 type SnapshotCategory = RulesSnapshot["categories"][number];
 
 // Share of the context window for the prompt; the rest is left for output.
 const PROMPT_SHARE = 0.6;
-// Overview is a cheap summary; cap its prompt whatever the window.
-const OVERVIEW_BUDGET = 6000;
+// Plan and conclusion are summaries; cap their prompts whatever the window.
+const PLAN_BUDGET = 16_000;
+const CONCLUSION_BUDGET = 8000;
+// Agent units start smaller: tool results fill the rest of the window.
+const AGENT_PROMPT_SHARE = 0.35;
+// The agent must answer once its conversation fills this share.
+const AGENT_CONTEXT_SHARE = 0.8;
+// Tool rounds per agent unit, the last one being the answer.
+const AGENT_STEPS = 12;
+// Repository map in agent prompts, in characters.
+const AGENT_MAP_CHARS = 4000;
 // Room kept for the overview summary when sizing chunks.
 const SUMMARY_RESERVE = 400;
 const MAX_ERROR_LENGTH = 500;
@@ -155,7 +179,7 @@ export async function startReview(
   });
 
   const ignored = ignoreMatcher(project);
-  const rows = insertFiles(
+  insertFiles(
     parsed.map((f) => {
       const skip = skipReason(f, ignored);
       return {
@@ -171,7 +195,6 @@ export async function startReview(
     }),
   );
 
-  planUnits(review, project, snapshot, model, rows.filter((r) => r.state === FileState.Queued));
   launch(review.id);
   return review.id;
 }
@@ -207,39 +230,146 @@ function hash(text: string): string {
 
 // --- planning --------------------------------------------------------------
 
-// Units for each file: one per pass, split into chunks that fit the model.
+// A set of files reviewed together. title/focus: from the orchestrator,
+// null for fallback groups.
+type Group = { title: string | null; focus: string | null; files: ReviewFile[] };
+
+// The orchestrator's call: overview of the whole change, then groups for
+// `files` (the unplanned ones). Files it leaves out are grouped by directory.
+async function plan(ctx: RunContext, files: ReviewFile[]): Promise<Group[]> {
+  const all = filesForReview(ctx.review.id).filter((f) => f.state !== FileState.Skipped);
+  const budget = Math.min(PLAN_BUDGET, Math.floor(ctx.model.model.contextWindow * PROMPT_SHARE));
+  const { instructions, prompt } = planPrompt(ctx.project.description, all.map((f) => parseDiff(f.patch)[0]), budget);
+
+  try {
+    const { object, usage } = await generateObject(ctx.model.config, { instructions, prompt, schema: planSchema, signal: ctx.signal });
+    addReviewTokens(ctx.review.id, usage.input, usage.output);
+    const overview = object.overview.trim();
+    updateReview(ctx.review.id, { summary: overview });
+    ctx.review = { ...ctx.review, summary: overview };
+    return groupsFromPlan(object.groups, files);
+  } catch (e) {
+    if (ctx.signal.aborted) {
+      throw e;
+    }
+
+    // Units still work without the plan, with less context.
+    console.error(`Review ${ctx.review.id}: planning failed`, e);
+    return directoryGroups(files);
+  }
+}
+
+// Planner groups mapped to file rows: unknown paths and repeats dropped,
+// oversized groups split, leftovers grouped by directory.
+function groupsFromPlan(planned: { title: string; files: string[]; focus: string }[], files: ReviewFile[]): Group[] {
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const taken = new Set<number>();
+  const groups: Group[] = [];
+
+  for (const g of planned) {
+    const rows = g.files.flatMap((p) => byPath.get(p.trim()) ?? []).filter((f) => !taken.has(f.id));
+    if (rows.length === 0) {
+      continue;
+    }
+
+    rows.forEach((f) => taken.add(f.id));
+    for (let i = 0; i < rows.length; i += MAX_GROUP_FILES) {
+      groups.push({ title: g.title.trim() || null, focus: g.focus.trim() || null, files: rows.slice(i, i + MAX_GROUP_FILES) });
+    }
+  }
+
+  return [...groups, ...directoryGroups(files.filter((f) => !taken.has(f.id)))];
+}
+
+// Fallback: files of a directory together, e.g. src/pay/a.ts + src/pay/b.ts.
+function directoryGroups(files: ReviewFile[]): Group[] {
+  const byDir = new Map<string, ReviewFile[]>();
+  for (const f of files) {
+    const dir = f.path.slice(0, f.path.lastIndexOf("/") + 1);
+    byDir.set(dir, [...(byDir.get(dir) ?? []), f]);
+  }
+
+  return [...byDir.values()].flatMap((rows) => {
+    const groups: Group[] = [];
+    for (let i = 0; i < rows.length; i += MAX_GROUP_FILES) {
+      groups.push({ title: null, focus: null, files: rows.slice(i, i + MAX_GROUP_FILES) });
+    }
+
+    return groups;
+  });
+}
+
+// Units for each group: one per pass, split so each prompt fits the model.
 //   passes: Bugs alone; custom categories together, or one pass each when
 //   their rule count exceeds the threshold.
-function planUnits(
-  review: Review,
-  project: Project,
-  snapshot: RulesSnapshot,
-  model: ResolvedModel,
-  files: ReviewFile[],
-): void {
+//   split: the group's files packed by diff size; a file too big alone is
+//   chunked by hunks.
+function planUnits(review: Review, project: Project, snapshot: RulesSnapshot, model: ResolvedModel, groups: Group[]): void {
   const threshold = getSettings().passThreshold;
-  const budget = Math.floor(model.model.contextWindow * PROMPT_SHARE);
+  const window = model.model.contextWindow;
 
-  const units = files.flatMap((file) => {
-    const parsed = parseDiff(file.patch)[0];
-    const categories = snapshot.categories.filter((c) => appliesTo(c, file.path));
+  const units = groups.flatMap((group) => {
+    const categories = snapshot.categories.filter((c) => group.files.some((f) => appliesTo(c, f.path)));
 
     return passes(categories, threshold).flatMap((pass) => {
-      const room = budget - unitOverhead(project.description, "", pass.categories) - SUMMARY_RESERVE;
+      const files = group.files.filter((f) => pass.categories.some((c) => appliesTo(c, f.path)));
+      const agent = model.model.toolCalling && pass.categories.some((c) => c.kind === CategoryKind.Bugs);
+      const share = agent ? AGENT_PROMPT_SHARE : PROMPT_SHARE;
+      const room = Math.floor(window * share) - unitOverhead(project.description, "", pass.categories) - SUMMARY_RESERVE;
 
-      return chunkHunks(parsed, room).map((hunks, chunk) => ({
+      return packFiles(files, room).map((pack) => ({
         reviewId: review.id,
-        fileId: file.id,
+        fileId: pack.files[0].id,
+        fileIds: pack.files.length > 1 ? JSON.stringify(pack.files.map((f) => f.id)) : null,
+        title: group.title,
+        focus: group.focus,
         pass: pass.name,
         categoryIds: JSON.stringify(pass.categories.map((c) => c.id)),
-        chunk,
-        hunks: JSON.stringify(hunks),
+        chunk: pack.chunk,
+        hunks: JSON.stringify(pack.files.length > 1 ? Object.fromEntries(pack.files.map((f) => [f.id, pack.hunks.get(f.id)])) : pack.hunks.get(pack.files[0].id)),
         status: UnitStatus.Pending,
       }));
     });
   });
 
   insertUnits(units);
+}
+
+type Pack = { files: ReviewFile[]; hunks: Map<number, number[]>; chunk: number };
+
+// Files packed into prompts of at most `room` diff tokens.
+//   [a 2k, b 1k, c 9k] with room 4k → [a, b] · [c part 1] · [c part 2]
+function packFiles(files: ReviewFile[], room: number): Pack[] {
+  const packs: Pack[] = [];
+  let current: Pack = { files: [], hunks: new Map(), chunk: 0 };
+  let used = 0;
+
+  for (const file of files) {
+    const parsed = parseDiff(file.patch)[0];
+    const size = parsed.hunks.reduce((n, h) => n + hunkTokens(h), 0);
+    const all = parsed.hunks.map((_, i) => i);
+
+    if (size > room) {
+      chunkHunks(parsed, room).forEach((hunks, chunk) => packs.push({ files: [file], hunks: new Map([[file.id, hunks]]), chunk }));
+      continue;
+    }
+
+    if (current.files.length > 0 && used + size > room) {
+      packs.push(current);
+      current = { files: [], hunks: new Map(), chunk: 0 };
+      used = 0;
+    }
+
+    current.files.push(file);
+    current.hunks.set(file.id, all);
+    used += size;
+  }
+
+  if (current.files.length > 0) {
+    packs.push(current);
+  }
+
+  return packs;
 }
 
 function appliesTo(c: SnapshotCategory, path: string): boolean {
@@ -324,14 +454,31 @@ async function run(reviewId: number, signal: AbortSignal): Promise<void> {
 
   // Every call of this review counts against the model's cap.
   const limit = modelLimiter(ctx.model.model.id, ctx.model.model.maxConcurrency);
-  const pending = unitsForReview(reviewId).filter((u) => u.status === UnitStatus.Pending);
-  if (pending.length > 0 && !review.summary) {
-    ctx.review = { ...review, summary: await limit(() => overview(ctx)) };
+
+  // Queued files without units: new review, or re-review of changed files.
+  const planned = new Set(unitsForReview(reviewId).flatMap(unitFileIds));
+  const unplanned = filesForReview(reviewId).filter((f) => f.state === FileState.Queued && !planned.has(f.id));
+  if (unplanned.length > 0) {
+    const groups = await limit(() => plan(ctx, unplanned));
+    if (signal.aborted) {
+      updateReview(reviewId, { status: ReviewStatus.Canceled, finishedAt: new Date() });
+      return;
+    }
+
+    planUnits(ctx.review, project, ctx.snapshot, ctx.model, groups);
+
+    // No pass applies, e.g. every category's globs exclude the file.
+    const covered = new Set(unitsForReview(reviewId).flatMap(unitFileIds));
+    for (const f of unplanned.filter((f) => !covered.has(f.id))) {
+      updateFile(f.id, { state: FileState.Skipped, skipReason: "No rules apply to this file" });
+    }
   }
 
-  await Promise.all(pending.map((u) => limit(() => runUnit(ctx, u))));
+  const pending = unitsForReview(reviewId).filter((u) => u.status === UnitStatus.Pending);
+  const map = pending.length > 0 && ctx.model.model.toolCalling ? await repoMap({ project, review }, AGENT_MAP_CHARS) : "";
+  await Promise.all(pending.map((u) => limit(() => runUnit(ctx, u, map))));
 
-  const touched = new Set(pending.map((u) => u.fileId));
+  const touched = new Set(pending.flatMap(unitFileIds));
   finishFiles(reviewId, touched);
 
   if (signal.aborted) {
@@ -342,6 +489,19 @@ async function run(reviewId: number, signal: AbortSignal): Promise<void> {
 
   const units = unitsForReview(reviewId);
   const failed = units.filter((u) => u.status === UnitStatus.Failed).length;
+
+  // Written before the status flips, so the report polls until it lands.
+  if (!failed && units.length > 0 && !review.conclusion) {
+    await limit(() => conclude(ctx)).catch((e) => {
+      if (signal.aborted) {
+        return;
+      }
+
+      // The report still shows its findings without the recap.
+      console.error(`Review ${reviewId}: conclusion failed`, e);
+    });
+  }
+
   updateReview(reviewId, {
     status: failed ? ReviewStatus.Failed : ReviewStatus.Done,
     error: failed ? `${failed} of ${units.length} units failed. Retry to run them again.` : null,
@@ -349,97 +509,203 @@ async function run(reviewId: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-// One cheap call summarizing the whole change, so per-file units keep the
-// big picture without seeing every diff.
-async function overview(ctx: RunContext): Promise<string> {
-  const files = filesForReview(ctx.review.id)
-    .filter((f) => f.state !== FileState.Skipped)
-    .map((f) => parseDiff(f.patch)[0]);
+// One call recapping the open findings: verdict and what to fix first.
+async function conclude(ctx: RunContext): Promise<void> {
+  const reviewId = ctx.review.id;
+  const rules = new Map(ctx.snapshot.categories.flatMap((c) => c.rules.map((r) => [r.id, r.name] as const)));
+  const files = filesForReview(reviewId)
+    .filter((f) => f.state === FileState.Reviewed)
+    .map((f) => f.path);
+  const open = findingsForReview(reviewId)
+    .filter((f) => f.status === FindingStatus.Open)
+    .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])
+    .map((f) => ({
+      id: f.id,
+      severity: f.severity,
+      rule: `${ruleKey(f.ruleId)} ${rules.get(f.ruleId) ?? ""}`.trim(),
+      path: f.path,
+      line: f.startLine,
+      title: f.title,
+      explanation: f.explanation,
+    }));
 
-  const budget = Math.min(OVERVIEW_BUDGET, Math.floor(ctx.model.model.contextWindow * PROMPT_SHARE));
-  const { instructions, prompt } = overviewPrompt(ctx.project.description, files, budget);
-
-  try {
-    const { text, usage } = await generatePlain(ctx.model.config, { instructions, prompt, signal: ctx.signal });
-    addReviewTokens(ctx.review.id, usage.input, usage.output);
-    updateReview(ctx.review.id, { summary: text.trim() });
-    return text.trim();
-  } catch (e) {
-    if (ctx.signal.aborted) {
-      throw e;
-    }
-
-    // Units still work without the overview, just with less context.
-    console.error(`Review ${ctx.review.id}: overview failed`, e);
-    return "";
-  }
+  const budget = Math.min(CONCLUSION_BUDGET, Math.floor(ctx.model.model.contextWindow * PROMPT_SHARE));
+  const { instructions, prompt } = conclusionPrompt(ctx.review.summary, files, open, budget);
+  const { text, usage } = await generatePlain(ctx.model.config, { instructions, prompt, signal: ctx.signal });
+  addReviewTokens(reviewId, usage.input, usage.output);
+  updateReview(reviewId, { conclusion: text.trim() });
 }
 
-async function runUnit(ctx: RunContext, unit: ReviewUnit): Promise<void> {
+// One unit: its files' diffs and new versions, reviewed by an agent
+// (bugs pass, tool calling) or in one call. Findings land as it ends.
+async function runUnit(ctx: RunContext, unit: ReviewUnit, map: string): Promise<void> {
   if (ctx.signal.aborted) {
     return;
   }
 
-  updateUnit(unit.id, { status: UnitStatus.Running, error: null });
+  updateUnit(unit.id, { status: UnitStatus.Running, error: null, activity: null });
 
   try {
-    const file = fileById(unit.fileId);
-    if (!file) {
+    const files = await unitFiles(ctx, unit);
+    if (files.length === 0) {
       return;
     }
 
-    const parsed = parseDiff(file.patch)[0];
     const ids: number[] = JSON.parse(unit.categoryIds);
     const categories = ctx.snapshot.categories.filter((c) => ids.includes(c.id));
-    const hunks = (JSON.parse(unit.hunks) as number[]).map((i) => parsed.hunks[i]).filter(Boolean);
     const kind = categories.some((c) => c.kind === CategoryKind.Bugs) ? PassKind.Bugs : PassKind.Rules;
-    // Pasted files exist only in their patch, which holds them whole.
-    const content = ctx.review.mode === DiffMode.Pasted ? null : await headContent(ctx.project.path, ctx.review.headSha, file.path);
+    const agentic = kind === PassKind.Bugs && ctx.model.model.toolCalling;
 
-    // Bugs pass also sees how other files use what this diff changes.
-    const lookup = kind === PassKind.Bugs ? await lookupUsages(ctx, parsed, hunks) : { usages: "", usage: NO_USAGE };
+    const result = agentic
+      ? await agentReview(ctx, unit, files, categories, map).catch((e: unknown) => {
+          if (ctx.signal.aborted) {
+            throw e;
+          }
 
-    const { instructions, prompt } = unitPrompt({
-      kind,
-      description: ctx.project.description,
-      summary: ctx.review.summary,
-      categories,
-      file: parsed,
-      hunks,
-      content,
-      budget: Math.floor(ctx.model.model.contextWindow * PROMPT_SHARE),
-      usages: lookup.usages,
+          // e.g. the provider rejects tools with JSON output: one-shot instead.
+          console.error(`Review ${ctx.review.id}: agent unit ${unit.id} failed, retrying without tools`, e);
+          return directReview(ctx, unit, files, categories, kind);
+        })
+      : await directReview(ctx, unit, files, categories, kind);
+
+    insertFindings(toFindings(result.drafts, { kind, categories, files, unit }));
+    updateUnit(unit.id, {
+      status: UnitStatus.Done,
+      activity: null,
+      inputTokens: result.usage.input,
+      outputTokens: result.usage.output,
     });
-    updateUnit(unit.id, { prompt: `${instructions}\n\n---\n\n${prompt}` });
-
-    const { object, usage: spent } = await generateObject(ctx.model.config, {
-      instructions,
-      prompt,
-      schema: findingsSchema,
-      signal: ctx.signal,
-    });
-    const usage = { input: spent.input + lookup.usage.input, output: spent.output + lookup.usage.output };
-
-    const dismissed = findingsForFile(file.id).filter((f) => f.status === FindingStatus.Dismissed);
-    insertFindings(toFindings(object.findings, { kind, categories, file, unit, content, dismissed }));
-
-    updateUnit(unit.id, { status: UnitStatus.Done, inputTokens: usage.input, outputTokens: usage.output });
-    addReviewTokens(ctx.review.id, usage.input, usage.output);
+    addReviewTokens(ctx.review.id, result.usage.input, result.usage.output);
   } catch (e) {
     if (ctx.signal.aborted) {
-      updateUnit(unit.id, { status: UnitStatus.Pending });
+      updateUnit(unit.id, { status: UnitStatus.Pending, activity: null });
       return;
     }
 
-    updateUnit(unit.id, { status: UnitStatus.Failed, error: errorText(e) });
+    updateUnit(unit.id, { status: UnitStatus.Failed, activity: null, error: errorText(e) });
   }
+}
+
+type UnitResult = { drafts: FindingDraft[]; usage: Usage };
+
+type LoadedFile = UnitFile & { row: ReviewFile };
+
+async function unitFiles(ctx: RunContext, unit: ReviewUnit): Promise<LoadedFile[]> {
+  const loaded: LoadedFile[] = [];
+  for (const [fileId, indexes] of unitHunks(unit)) {
+    const row = fileById(fileId);
+    if (!row) {
+      continue;
+    }
+
+    const file = parseDiff(row.patch)[0];
+    const hunks = indexes.map((i) => file.hunks[i]).filter(Boolean);
+    // Pasted files exist only in their patch, which holds them whole.
+    const content = ctx.review.mode === DiffMode.Pasted ? null : await headContent(ctx.project.path, ctx.review.headSha, row.path);
+    loaded.push({ row, file, hunks, content });
+  }
+
+  return loaded;
+}
+
+// Bugs pass with tools: the model reads callers, callees and types of the
+// reviewed version before reporting. Its steps show live in the report.
+async function agentReview(
+  ctx: RunContext,
+  unit: ReviewUnit,
+  files: LoadedFile[],
+  categories: SnapshotCategory[],
+  map: string,
+): Promise<UnitResult> {
+  const mine = new Set(files.map((f) => f.row.id));
+  const otherFiles = filesForReview(ctx.review.id)
+    .filter((f) => !mine.has(f.id) && f.state !== FileState.Skipped)
+    .map((f) => f.path);
+
+  const { instructions, prompt } = unitPrompt({
+    kind: PassKind.Bugs,
+    description: ctx.project.description,
+    summary: ctx.review.summary,
+    focus: unit.focus ?? "",
+    categories,
+    files,
+    budget: Math.floor(ctx.model.model.contextWindow * AGENT_PROMPT_SHARE),
+    usages: "",
+    agent: { steps: AGENT_STEPS, repoMap: map, otherFiles },
+  });
+  const sent = `${instructions}\n\n---\n\n${prompt}`;
+  updateUnit(unit.id, { prompt: sent, activity: "Reading the diff" });
+
+  const { object, usage, trace } = await generateAgentObject(ctx.model.config, {
+    instructions,
+    prompt,
+    schema: findingsSchema,
+    tools: repoTools({ project: ctx.project, review: ctx.review }, ToolScope.Review),
+    budget: { steps: AGENT_STEPS, contextTokens: Math.floor(ctx.model.model.contextWindow * AGENT_CONTEXT_SHARE) },
+    signal: ctx.signal,
+    onTool: (name, input) => updateUnit(unit.id, { activity: toolActivity(name, input) }),
+  });
+
+  const steps = trace.length > 0 ? trace.map((t) => `- ${t}`).join("\n") : "(none)";
+  updateUnit(unit.id, { prompt: `${sent}\n\n---\n\n## Agent tool calls\n${steps}` });
+  return { drafts: object.findings, usage };
+}
+
+// "Reading pay.ts:40-90", "Searching refund in *.java", for the live view.
+function toolActivity(name: string, input: unknown): string {
+  const i = (input ?? {}) as Record<string, unknown>;
+  const where = i.glob ? ` in ${i.glob}` : "";
+  const range = i.startLine ? `:${i.startLine}-${i.endLine ?? ""}` : "";
+  const labels: Record<string, string> = {
+    read_file: `Reading ${i.path}${range}`,
+    read_symbol: `Reading ${i.name}${i.path ? ` in ${i.path}` : ""}`,
+    search: `Searching ${i.pattern}${where}`,
+    find_usages: `Finding usages of ${i.identifier}${where}`,
+    outline: `Outlining ${i.path}`,
+    list_files: `Listing ${i.glob}`,
+  };
+  return labels[name] ?? `Running ${name}`;
+}
+
+// One call with the unit's diffs. The bugs pass first greps usages of
+// what the diff changes, so it isn't blind to other files.
+async function directReview(
+  ctx: RunContext,
+  unit: ReviewUnit,
+  files: LoadedFile[],
+  categories: SnapshotCategory[],
+  kind: PassKind,
+): Promise<UnitResult> {
+  updateUnit(unit.id, { activity: kind === PassKind.Bugs ? "Looking up usages" : "Waiting for the model" });
+  const lookup = kind === PassKind.Bugs ? await lookupUsages(ctx, files) : { usages: "", usage: NO_USAGE };
+
+  const { instructions, prompt } = unitPrompt({
+    kind,
+    description: ctx.project.description,
+    summary: ctx.review.summary,
+    focus: unit.focus ?? "",
+    categories,
+    files,
+    budget: Math.floor(ctx.model.model.contextWindow * PROMPT_SHARE),
+    usages: lookup.usages,
+    agent: null,
+  });
+  updateUnit(unit.id, { prompt: `${instructions}\n\n---\n\n${prompt}`, activity: "Waiting for the model" });
+
+  const { object, usage } = await generateObject(ctx.model.config, {
+    instructions,
+    prompt,
+    schema: findingsSchema,
+    signal: ctx.signal,
+  });
+  return { drafts: object.findings, usage: { input: usage.input + lookup.usage.input, output: usage.output + lookup.usage.output } };
 }
 
 // Asks which identifiers the diff changes, then greps their usages in other
 // files. e.g. balance() flips sign → PaymentService's `cents > remaining`.
-async function lookupUsages(ctx: RunContext, file: ParsedFile, hunks: Hunk[]): Promise<{ usages: string; usage: Usage }> {
+async function lookupUsages(ctx: RunContext, files: LoadedFile[]): Promise<{ usages: string; usage: Usage }> {
   try {
-    const { instructions, prompt } = lookupPrompt(file, hunks);
+    const { instructions, prompt } = lookupPrompt(files);
     const { object, usage } = await generateObject(ctx.model.config, {
       instructions,
       prompt,
@@ -450,16 +716,17 @@ async function lookupUsages(ctx: RunContext, file: ParsedFile, hunks: Hunk[]): P
     const names = [...new Set(object.identifiers.map((n) => n.trim()))]
       .filter((n) => IDENTIFIER.test(n))
       .slice(0, MAX_LOOKUPS);
+    const own = files.map((f) => f.row.path);
 
     const blocks: string[] = [];
     for (const name of names) {
       const out = await wordUsages(ctx.project.path, name, ctx.review.headSha, USAGE_CONTEXT_LINES);
 
-      // Groups ("--" separated) in this file are in the prompt already.
+      // Groups ("--" separated) in this unit's files are in the prompt already.
       const groups = out
         .trimEnd()
         .split("\n--\n")
-        .filter((g) => g && !g.startsWith(`${file.path}:`) && !g.startsWith(`${file.path}-`));
+        .filter((g) => g && !own.some((p) => g.startsWith(`${p}:`) || g.startsWith(`${p}-`)));
       if (groups.length === 0) {
         continue;
       }
@@ -475,7 +742,7 @@ async function lookupUsages(ctx: RunContext, file: ParsedFile, hunks: Hunk[]): P
     }
 
     // The unit still works without usages, just blind to other files.
-    console.error(`Review ${ctx.review.id}: usage lookup for ${file.path} failed`, e);
+    console.error(`Review ${ctx.review.id}: usage lookup for unit failed`, e);
     return { usages: "", usage: NO_USAGE };
   }
 }
@@ -483,26 +750,27 @@ async function lookupUsages(ctx: RunContext, file: ParsedFile, hunks: Hunk[]): P
 type DraftContext = {
   kind: PassKind;
   categories: SnapshotCategory[];
-  file: ReviewFile;
+  files: LoadedFile[];
   unit: ReviewUnit;
-  content: string | null;
-  dismissed: Finding[];
 };
 
-// Keeps drafts that cite a real rule of this pass and whose quote exists in
-// the file; re-anchors their lines on the quote. Skips repeats of findings
-// the user already dismissed.
+// Keeps drafts on one of the unit's files, citing a real rule of this pass
+// that applies to that file, whose quote exists in it; re-anchors their
+// lines on the quote. Skips repeats of findings the user already dismissed.
 function toFindings(drafts: FindingDraft[], ctx: DraftContext): FindingInput[] {
   const rules = new Map(
-    ctx.categories.flatMap((c) => c.rules.map((r) => [r.id, { categoryId: c.id, rule: r }] as const)),
+    ctx.categories.flatMap((c) => c.rules.map((r) => [r.id, { category: c, rule: r }] as const)),
   );
-  const seen = new Set(ctx.dismissed.map((f) => dedupeKey(f.ruleId, f.quote)));
+  const seen = new Set(
+    ctx.files.flatMap((f) => findingsForFile(f.row.id).filter((x) => x.status === FindingStatus.Dismissed)).map((f) => dedupeKey(f.ruleId, f.quote)),
+  );
   const result: FindingInput[] = [];
 
   for (const d of drafts) {
     const id = Number(RULE_KEY.exec(d.rule.trim())?.[1]);
     const match = rules.get(id);
-    if (!match) {
+    const file = draftFile(d, ctx.files);
+    if (!match || !file || !appliesTo(match.category, file.row.path)) {
       continue;
     }
 
@@ -510,9 +778,9 @@ function toFindings(drafts: FindingDraft[], ctx: DraftContext): FindingInput[] {
       continue;
     }
 
-    const span = ctx.content === null
+    const span = file.content === null
       ? { start: d.startLine, end: d.endLine }
-      : locate(ctx.content, d.quote, d.startLine);
+      : locate(file.content, d.quote, d.startLine);
     if (!span) {
       continue;
     }
@@ -522,15 +790,15 @@ function toFindings(drafts: FindingDraft[], ctx: DraftContext): FindingInput[] {
     }
 
     result.push({
-      reviewId: ctx.file.reviewId,
-      fileId: ctx.file.id,
+      reviewId: file.row.reviewId,
+      fileId: file.row.id,
       unitId: ctx.unit.id,
-      path: ctx.file.path,
+      path: file.row.path,
       startLine: span.start,
       endLine: span.end,
       quote: d.quote,
       ruleId: id,
-      categoryId: match.categoryId,
+      categoryId: match.category.id,
       // User-set severity wins; bug severity depends on the bug.
       severity: ctx.kind === PassKind.Bugs ? d.severity : match.rule.severity,
       confidence: ctx.kind === PassKind.Bugs ? d.confidence : null,
@@ -545,6 +813,23 @@ function toFindings(drafts: FindingDraft[], ctx: DraftContext): FindingInput[] {
   return result;
 }
 
+// The unit file a draft names: exact path, else a path ending with it
+// ("pay.ts" for "src/pay.ts"), else the only file.
+function draftFile(d: FindingDraft, files: LoadedFile[]): LoadedFile | undefined {
+  const named = d.path?.trim().replace(/^\.?\//, "") ?? "";
+  const exact = files.find((f) => f.row.path === named);
+  if (exact) {
+    return exact;
+  }
+
+  const suffix = named && files.find((f) => f.row.path.endsWith(`/${named}`));
+  if (suffix) {
+    return suffix;
+  }
+
+  return files.length === 1 ? files[0] : undefined;
+}
+
 function dedupeKey(ruleId: number, quote: string): string {
   return `${ruleId}|${quote.replace(/\s+/g, " ").trim()}`;
 }
@@ -555,7 +840,7 @@ function finishFiles(reviewId: number, fileIds: Set<number>): void {
   const units = unitsForReview(reviewId);
 
   for (const fileId of fileIds) {
-    const fileUnits = units.filter((u) => u.fileId === fileId);
+    const fileUnits = units.filter((u) => unitFileIds(u).includes(fileId));
     if (fileUnits.every((u) => u.status === UnitStatus.Done)) {
       updateFile(fileId, { state: FileState.Reviewed });
     }
@@ -591,6 +876,19 @@ function errorText(e: unknown): string {
 
 export function cancelReview(reviewId: number): void {
   controllers.get(reviewId)?.abort();
+}
+
+// Rewrites the review summary, e.g. after findings were dismissed or fixed.
+export async function summarizeReview(reviewId: number): Promise<void> {
+  const review = requireIdle(reviewId);
+  const project = projectById(review.projectId);
+  if (!project) {
+    throw new InputError("Unknown project");
+  }
+
+  const model = resolveModel(review.modelId);
+  const ctx: RunContext = { review, project, snapshot: JSON.parse(review.rules), model, signal: new AbortController().signal };
+  await modelLimiter(model.model.id, model.model.maxConcurrency)(() => conclude(ctx));
 }
 
 export function retryReview(reviewId: number): void {
@@ -707,9 +1005,8 @@ export function rereviewChanged(reviewId: number): number {
     updateFile(f.id, { state: FileState.Queued });
   }
 
-  const model = resolveModel(review.modelId);
-  planUnits(review, project, JSON.parse(review.rules), model, changed);
-  updateReview(reviewId, { summary: "" });
+  // Planned again on launch, with a fresh overview.
+  updateReview(reviewId, { summary: "", conclusion: "" });
   launch(reviewId);
   return changed.length;
 }

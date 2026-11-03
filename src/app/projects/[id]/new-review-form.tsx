@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Loader2, Play } from "lucide-react";
 import { toast } from "sonner";
@@ -11,7 +11,7 @@ import { compactPaths, Expand, FileTree, type TreeFile } from "@/components/proj
 import { RefCombobox, type RefOption } from "@/components/projects/ref-combobox";
 import { timeAgo } from "@/components/projects/review-status";
 import { DiffMode } from "@/lib/domain";
-import { listCommits, listFiles, startReview, type CommitInfo, type ProjectRefs } from "@/app/actions";
+import { listCommits, listFiles, listRangeFiles, startReview, type ChangedFile, type CommitInfo, type ProjectRefs } from "@/app/actions";
 import type { CategoryView, RuleSetView } from "@/app/rules/actions";
 import { EMPTY_PASTE, PastedFiles, pastedFiles, type PasteState } from "./pasted-files";
 import { choiceRuleIds, RulesPicker, type RulesChoice } from "./rules-picker";
@@ -33,6 +33,12 @@ const ALL_BRANCHES = "All branches";
 
 type Range = { base: string | null; head: string | null };
 
+// Modes that diff two commits; their changed files load once the range is set.
+const RANGE_MODES = new Set([DiffMode.LastCommit, DiffMode.Commits, DiffMode.Branches]);
+
+// Changed files of one range. key: the range they belong to, e.g. "branches|main|feature".
+type RangeFiles = { key: string; files: TreeFile[] };
+
 type Props = {
   projectId: number;
   refs: ProjectRefs;
@@ -53,16 +59,17 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
   const [branchFilter, setBranchFilter] = useState(ALL_BRANCHES);
   const [commitList, setCommitList] = useState(refs.commits);
   const [rules, setRules] = useState<RulesChoice>({ setId: defaultSetId, custom: null });
-  // Uncommitted files left out; new changes are picked by default.
-  const [excluded, setExcluded] = useState(() => new Set<string>());
+  // Changed files left out, per listing (uncommitted or one range); new
+  // changes are picked by default.
+  const [excluded, setExcluded] = useState<Record<string, Set<string>>>({});
+  const [rangeFiles, setRangeFiles] = useState<RangeFiles | null>(null);
+  const [loadingRange, startLoadingRange] = useTransition();
   // Working tree files for Files mode, loaded on first use.
   const [repoFiles, setRepoFiles] = useState<TreeFile[] | null>(null);
   const [picked, setPicked] = useState(() => new Set<string>());
   const [loadingFiles, startLoadingFiles] = useTransition();
   const [paste, setPaste] = useState<PasteState>(EMPTY_PASTE);
 
-  const changes: TreeFile[] = refs.changes.map((f) => ({ path: f.path, tag: f.change[0], tagLabel: f.change }));
-  const kept = new Set(changes.map((f) => f.path).filter((p) => !excluded.has(p)));
 
   const commitOptions: RefOption[] = commitList.map((c) => ({
     value: c.short,
@@ -82,11 +89,39 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
   const range = mode === DiffMode.Commits ? commits : branches;
   const setRange = mode === DiffMode.Commits ? setCommits : setBranches;
   const options = mode === DiffMode.Commits ? commitOptions : branchOptions;
+  const refsPicked = twoRefs ? range : { base: null, head: null };
+
+  // Changed files to pick from: uncommitted, or the picked range once loaded.
+  const rangeKey = RANGE_MODES.has(mode) && (!twoRefs || (range.base && range.head)) ? `${mode}|${range.base}|${range.head}` : null;
+  const listKey = mode === DiffMode.Uncommitted ? mode : rangeKey;
+  const changes: TreeFile[] | null =
+    mode === DiffMode.Uncommitted ? refs.changes.map(treeFile) : rangeFiles?.key === rangeKey ? rangeFiles.files : null;
+  const dropped = (listKey && excluded[listKey]) || new Set<string>();
+  const kept = new Set((changes ?? []).map((f) => f.path).filter((p) => !dropped.has(p)));
+
   const incomplete =
     (twoRefs && (!range.base || !range.head)) ||
-    (mode === DiffMode.Uncommitted && kept.size === 0) ||
+    (changes !== null && kept.size === 0) ||
+    (rangeKey !== null && loadingRange) ||
     (mode === DiffMode.Files && picked.size === 0) ||
     (mode === DiffMode.Pasted && pastedFiles(paste).length === 0);
+
+  // Load the changed files of a newly picked range.
+  useEffect(() => {
+    if (rangeKey === null) {
+      return;
+    }
+
+    startLoadingRange(async () => {
+      const result = await listRangeFiles(projectId, { mode, base: refsPicked.base, head: refsPicked.head, paths: null });
+      if (result.error !== undefined) {
+        toast.error(result.error);
+        return;
+      }
+
+      setRangeFiles({ key: rangeKey, files: result.data.map(treeFile) });
+    });
+  }, [projectId, rangeKey, mode, refsPicked.base, refsPicked.head]);
 
   function pickMode(next: DiffMode) {
     setMode(next);
@@ -111,7 +146,7 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
       return compactPaths(repoFiles ?? [], picked);
     }
 
-    if (mode === DiffMode.Uncommitted && excluded.size > 0) {
+    if (changes && kept.size < changes.length) {
       return compactPaths(changes, kept);
     }
 
@@ -137,7 +172,6 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
   function submit(e: React.FormEvent) {
     e.preventDefault();
     startTransition(async () => {
-      const refsPicked = twoRefs ? range : { base: null, head: null };
       const source = { mode, ...refsPicked, paths: scope() };
       const pasted = mode === DiffMode.Pasted ? pastedFiles(paste) : [];
       const result = await startReview(projectId, source, choiceRuleIds(rules, ruleSets), pasted);
@@ -174,18 +208,6 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
         <p className="text-xs text-muted-foreground">{MODES.find((m) => m.mode === mode)?.hint}</p>
       </div>
 
-      {mode === DiffMode.Uncommitted &&
-        (changes.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No uncommitted changes.</p>
-        ) : (
-          <FileTree
-            label="Changed files"
-            files={changes}
-            selected={kept}
-            onChange={(next) => setExcluded(new Set(changes.map((f) => f.path).filter((p) => !next.has(p))))}
-            expand={Expand.All}
-          />
-        ))}
 
       {mode === DiffMode.Files &&
         (repoFiles === null || loadingFiles ? (
@@ -235,6 +257,27 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
         </div>
       )}
 
+      {listKey !== null &&
+        (changes === null ? (
+          loadingRange && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              Loading changed files…
+            </p>
+          )
+        ) : changes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{mode === DiffMode.Uncommitted ? "No uncommitted changes." : "No changes in this range."}</p>
+        ) : (
+          <FileTree
+            key={listKey}
+            label="Changed files"
+            files={changes}
+            selected={kept}
+            onChange={(next) => setExcluded((prev) => ({ ...prev, [listKey]: new Set(changes.map((f) => f.path).filter((p) => !next.has(p))) }))}
+            expand={Expand.All}
+          />
+        ))}
+
       <RulesPicker value={rules} onChange={setRules} ruleSets={ruleSets} categories={categories} defaultSetId={defaultSetId} />
 
       <div className="flex flex-wrap items-center justify-end gap-3">
@@ -246,6 +289,11 @@ export function NewReviewForm({ projectId, refs, ruleSets, categories, defaultSe
       </div>
     </form>
   );
+}
+
+// Changed file as a tree entry, tagged e.g. "M" for modified.
+function treeFile(f: ChangedFile): TreeFile {
+  return { path: f.path, tag: f.change[0], tagLabel: f.change };
 }
 
 // Default commit range: parent → tip.

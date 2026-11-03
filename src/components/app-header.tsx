@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 const NAV = [
   { href: "/", label: "Projects", match: (p: string) => p === "/" || p.startsWith("/projects") || p.startsWith("/reviews") },
   { href: "/rules", label: "Rules", match: (p: string) => p.startsWith("/rules") },
+  { href: "/stats", label: "Stats", match: (p: string) => p.startsWith("/stats") },
   { href: "/settings", label: "Settings", match: (p: string) => p.startsWith("/settings") },
 ];
 

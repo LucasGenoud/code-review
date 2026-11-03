@@ -28,12 +28,31 @@ function text(content) {
   return (content ?? []).map((p) => p.text ?? "").join("");
 }
 
-// Added lines of the diff section: "   12 + code" → { line: 12, code }.
+// Added lines of every diff section: "## Diff of a.py (modified) …" then
+// "   12 + code" → { path: "a.py", line: 12, code }.
 function addedLines(prompt) {
-  const diff = prompt.split(/^## Diff of /m)[1]?.split(/^## /m)[0] ?? "";
-  return [...diff.matchAll(/^\s*(\d+) \+ (.*)$/gm)]
-    .map((m) => ({ line: Number(m[1]), code: m[2] }))
-    .filter((l) => l.code.trim().length > 3);
+  return prompt.split(/^## Diff of /m).slice(1).flatMap((section) => {
+    const path = section.split(" ")[0];
+    const diff = section.split(/^## /m)[0];
+    return [...diff.matchAll(/^\s*(\d+) \+ (.*)$/gm)]
+      .map((m) => ({ path, line: Number(m[1]), code: m[2] }))
+      .filter((l) => l.code.trim().length > 3);
+  });
+}
+
+// Review plan: changed files grouped by directory.
+function reviewPlan(prompt) {
+  const files = [...prompt.matchAll(/^- (\S+) \((\w+)/gm)].map((m) => m[1]);
+  const byDir = new Map();
+  for (const f of files) {
+    const dir = f.includes("/") ? f.slice(0, f.lastIndexOf("/")) : "root";
+    byDir.set(dir, [...(byDir.get(dir) ?? []), f]);
+  }
+
+  return {
+    overview: `Mock overview: the change touches ${files.length} file(s): ${files.slice(0, 5).join(", ")}.`,
+    groups: [...byDir].map(([dir, paths]) => ({ title: `Mock group ${dir}`, files: paths, focus: "Check how these files use each other (mock)." })),
+  };
 }
 
 function findings(system, prompt) {
@@ -50,6 +69,7 @@ function findings(system, prompt) {
       const [, key, severity, ruleText] = rules[i % rules.length];
       const fixable = /print\(|console\.log|==\s*None|var /.test(l.code);
       return {
+        path: l.path,
         rule: key,
         title: bugs ? `Possible failure in line ${l.line}` : `Violates: ${ruleText.slice(0, 50)}`,
         severity,
@@ -96,6 +116,12 @@ function plain(system, prompt) {
     return `**Purpose**: ${name} (mock description).\n\n**Stack**: detected from the files list.\n\n**Structure**: see the repository tree.\n\n**Conventions**: none detected by the mock.`;
   }
 
+  if (/recap a finished code review/i.test(system)) {
+    const ids = [...prompt.matchAll(/^- (#\d+) /gm)].map((m) => m[1]);
+    const verdict = ids.length ? `Mock summary: fix ${ids.length} finding(s) before merging.` : "Mock summary: no blocking issues.";
+    return [verdict, "", ...ids.slice(0, 3).map((id) => `- Fix ${id} first.`)].join("\n");
+  }
+
   const files = [...prompt.matchAll(/^- (\S+) \((\w+)/gm)].map((m) => m[1]);
   return `Mock overview: the change touches ${files.length} file(s): ${files.slice(0, 5).join(", ")}.`;
 }
@@ -107,6 +133,10 @@ function completion(body) {
 
   if (wantsJson && /"changes"/.test(JSON.stringify(body.response_format ?? "")) || /maintain the rules/.test(system)) {
     return JSON.stringify(ruleChanges(prompt));
+  }
+
+  if (/lead a code review/i.test(system)) {
+    return JSON.stringify(reviewPlan(prompt));
   }
 
   // Usage lookup before the bugs pass: nothing to look up.

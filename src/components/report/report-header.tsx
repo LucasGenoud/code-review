@@ -32,7 +32,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { FileState, ReviewStatus } from "@/lib/domain";
+import { FileState, ReviewStatus, UnitStatus } from "@/lib/domain";
 import { formatTokens, isFinished } from "./report-lib";
 
 // Report title, run metadata and review-level actions.
@@ -197,11 +197,12 @@ function RunMeta({ report }: { report: Report }) {
 function RunProgress({ report }: { report: Report }) {
   const total = report.units.length;
   const done = report.units.filter(isFinished).length;
+  const active = report.units.filter((u) => u.status === UnitStatus.Running).length;
 
   return (
-    <div className="flex w-48 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+    <div className="flex w-60 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
       <Progress value={total === 0 ? null : (done / total) * 100} className="flex-1" aria-label="Review progress" />
-      <span className="shrink-0 tabular-nums">{total === 0 ? "Planning…" : `${done}/${total} units`}</span>
+      <span className="shrink-0 tabular-nums">{total === 0 ? "Planning…" : `${done}/${total} done · ${active} running`}</span>
     </div>
   );
 }

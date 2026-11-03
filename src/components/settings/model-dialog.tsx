@@ -159,7 +159,7 @@ export function ModelDialog({ providerId, model, suggestions, onLoadSuggestions,
             <SwitchField
               id="model-tools"
               label="Tool calling"
-              hint="Lets the review chat read project files and run code."
+              hint="Lets review agents and the chat explore the repository, and run code in the sandbox."
               checked={form.toolCalling}
               onChange={(toolCalling) => set({ toolCalling })}
             />

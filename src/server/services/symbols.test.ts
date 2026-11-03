@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { grepAt } from "@/server/drivers/git";
-import { definitionPattern, outline } from "./symbols";
+import { declarationEnd, definitionPattern, outline } from "./symbols";
 
 const TS = `import { db } from "./db";
 
@@ -88,5 +88,26 @@ describe("outline", () => {
       "14: total(items: Item[]): number {",
     ]);
     expect(outline(PY)).toEqual(["1: class Cart:", "2: def total(self, items):", "5: def load_order(order_id):"]);
+  });
+});
+
+describe("declarationEnd", () => {
+  const MAX = 50;
+
+  it("ends at the closing brace of the declaration", () => {
+    expect(declarationEnd(TS, 3, MAX)).toBe(5);
+    expect(declarationEnd(TS, 7, MAX)).toBe(11);
+    expect(declarationEnd(TS, 13, MAX)).toBe(17);
+    expect(declarationEnd(TS, 14, MAX)).toBe(16);
+  });
+
+  it("ends before the next declaration or a dedent in Python", () => {
+    expect(declarationEnd(PY, 2, MAX)).toBe(3);
+    expect(declarationEnd(PY, 1, MAX)).toBe(3);
+    expect(declarationEnd(PY, 5, MAX)).toBe(6);
+  });
+
+  it("caps long declarations", () => {
+    expect(declarationEnd(TS, 7, 2)).toBe(8);
   });
 });

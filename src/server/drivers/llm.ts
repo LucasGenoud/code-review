@@ -62,8 +62,10 @@ const COMPATIBLE_NAME = "compatible";
 
 // Extra attempts when the model returns JSON that fails the schema.
 const OBJECT_RETRIES = 2;
-// Tool calls plus the answer. Exploring a codebase easily takes 10+ reads.
+// Tool calls plus the answer, when the request sets no budget.
 const MAX_CHAT_STEPS = 30;
+// Added to the instructions of the last allowed step, which can't call tools.
+const BUDGET_SPENT = "\n\nYour tool budget is used up: answer now from what you found, and name what you would check next.";
 
 function languageModel(cfg: ModelConfig): LanguageModel {
   const apiKey = cfg.apiKey ?? undefined;
@@ -137,6 +139,50 @@ export async function generateObject<T extends z.ZodType>(
   }
 }
 
+type AgentRequest<T extends z.ZodType> = ObjectRequest<T> & {
+  tools: Record<string, ChatTool>;
+  budget: Budget;
+  // Before each tool runs, e.g. to show "Reading src/pay.ts:40-90".
+  onTool?: (name: string, input: unknown) => void;
+};
+
+// Structured output after a tool loop: the model explores with `tools`,
+// then answers in `schema`. The last allowed step can't call tools, so
+// the loop always ends with an answer. Returns the tool calls made, e.g.
+// ['read_symbol {"name":"balance"}'], for the prompt preview.
+export async function generateAgentObject<T extends z.ZodType>(
+  cfg: ModelConfig,
+  req: AgentRequest<T>,
+): Promise<{ object: z.infer<T>; usage: Usage; trace: string[] }> {
+  const trace: string[] = [];
+  const result = await generateText({
+    model: languageModel(cfg),
+    instructions: req.instructions,
+    prompt: req.prompt,
+    tools: toolSet(req.tools),
+    output: Output.object({ schema: req.schema }),
+    stopWhen: stepCountIs(req.budget.steps),
+    prepareStep: ({ stepNumber, steps }) => finalStep(stepNumber, steps, req.budget, req.instructions),
+    maxOutputTokens: cfg.maxOutputTokens ?? undefined,
+    abortSignal: req.signal,
+    onToolExecutionStart: ({ toolCall }) => {
+      trace.push(`${toolCall.toolName} ${JSON.stringify(toolCall.input)}`);
+      req.onTool?.(toolCall.toolName, toolCall.input);
+    },
+  });
+
+  return { object: result.output as z.infer<T>, usage: toUsage(result.totalUsage), trace };
+}
+
+function toolSet(tools: Record<string, ChatTool>): ToolSet {
+  const set: ToolSet = {};
+  for (const [name, t] of Object.entries(tools)) {
+    set[name] = tool({ description: t.description, inputSchema: t.input, execute: t.run });
+  }
+
+  return set;
+}
+
 export async function generatePlain(
   cfg: ModelConfig,
   req: { instructions: string; prompt: string; signal?: AbortSignal },
@@ -161,6 +207,8 @@ type ChatRequest = {
   // What the model sees, e.g. with old tool outputs trimmed. Default: messages.
   history?: UIMessage[];
   tools: Record<string, ChatTool>;
+  // Tool rounds, and context tokens after which the model must answer.
+  budget?: Budget;
   // Stops the answer; onEnd still saves what was generated.
   signal?: AbortSignal;
   onEnd: (messages: UIMessage[], usage: Usage) => void;
@@ -170,17 +218,15 @@ type ChatRequest = {
 // server-side. Calls `onEnd` with the full thread to persist it. The answer
 // carries ChatMetadata: tokens spent, context size, why it stopped.
 export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Response> {
-  const tools: ToolSet = {};
-  for (const [name, t] of Object.entries(req.tools)) {
-    tools[name] = tool({ description: t.description, inputSchema: t.input, execute: t.run });
-  }
-
+  const tools = toolSet(req.tools);
+  const budget = req.budget ?? { steps: MAX_CHAT_STEPS, contextTokens: Infinity };
   const result = streamText({
     model: languageModel(cfg),
     instructions: req.instructions,
     messages: await convertToModelMessages(req.history ?? req.messages),
     tools,
-    stopWhen: stepCountIs(MAX_CHAT_STEPS),
+    stopWhen: stepCountIs(budget.steps),
+    prepareStep: ({ stepNumber, steps }) => finalStep(stepNumber, steps, budget, req.instructions),
     maxOutputTokens: cfg.maxOutputTokens ?? undefined,
     abortSignal: req.signal,
   });
@@ -216,6 +262,26 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
       },
     }),
   });
+}
+
+export type Budget = { steps: number; contextTokens: number };
+
+// Forces the answer on the last allowed step, or once the conversation
+// nears the context window: no tools, and a note saying why. Without it a
+// long investigation ends on a tool call, with no answer at all.
+function finalStep(
+  stepNumber: number,
+  steps: { usage: LanguageModelUsage }[],
+  budget: Budget,
+  instructions: string,
+): { toolChoice?: "none"; instructions?: string } {
+  const last = steps.at(-1)?.usage;
+  const context = (last?.inputTokens ?? 0) + (last?.outputTokens ?? 0);
+  if (stepNumber < budget.steps - 1 && context < budget.contextTokens) {
+    return {};
+  }
+
+  return { toolChoice: "none", instructions: instructions + BUDGET_SPENT };
 }
 
 // A chat stream's bytes (e.g. replayed) as a useChat response.

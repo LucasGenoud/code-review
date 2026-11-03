@@ -45,6 +45,11 @@ export async function listFiles(id: number) {
   return attempt(() => projects.projectFiles(id));
 }
 
+// Files a commit range changes, for picking what its review covers.
+export async function listRangeFiles(id: number, source: DiffSource) {
+  return attempt(() => projects.projectRangeFiles(id, source));
+}
+
 // Codebase Q&A history, most recent first.
 export async function listCodebaseThreads(projectId: number) {
   await connection();

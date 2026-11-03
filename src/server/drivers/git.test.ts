@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import { FileChange } from "@/lib/domain";
-import { changedFiles, diff, wordUsages } from "./git";
+import { changedBetween, changedFiles, diff, wordUsages } from "./git";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prr-git-"));
 let nextRepo = 0;
@@ -55,6 +55,24 @@ it("lists modified, added, deleted, renamed and untracked files", async () => {
     { path: "gone.ts", change: FileChange.Deleted },
     { path: "mod.ts", change: FileChange.Modified },
     { path: "new name.ts", change: FileChange.Renamed },
+  ]);
+});
+
+it("lists files changed between two commits", async () => {
+  const repo = repoWith({ "mod.ts": "a\n", "gone.ts": "b\n", "old name.ts": "c\n" });
+  const base = git(repo, "rev-parse", "HEAD").trim();
+  fs.writeFileSync(path.join(repo, "mod.ts"), "a2\n");
+  fs.rmSync(path.join(repo, "gone.ts"));
+  git(repo, "mv", "old name.ts", "new name.ts");
+  fs.writeFileSync(path.join(repo, "new.ts"), "d\n");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-qm", "Change");
+
+  expect(await changedBetween(repo, base, "HEAD")).toEqual([
+    { path: "gone.ts", change: FileChange.Deleted },
+    { path: "mod.ts", change: FileChange.Modified },
+    { path: "new name.ts", change: FileChange.Renamed },
+    { path: "new.ts", change: FileChange.Added },
   ]);
 });
 
