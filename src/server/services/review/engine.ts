@@ -13,11 +13,13 @@ import {
   UnitStatus,
 } from "@/lib/domain";
 import { wordUsages } from "@/server/drivers/git";
-import { generateAgentObject, generateObject, generatePlain, type Usage } from "@/server/drivers/llm";
+import { defineTool, generateAgentObject, generateAgentText, generateObject, generatePlain, type ChatTool, type Usage } from "@/server/drivers/llm";
 import { undoableFixes } from "@/server/drivers/fixStore";
 import { projectById } from "@/server/drivers/projectStore";
 import {
   addReviewTokens,
+  appendReviewTrace,
+  appendUnitStep,
   deleteFindings,
   deleteOpenFindings,
   deleteUnitsForFile,
@@ -66,8 +68,10 @@ import {
   hunkTokens,
   lookupPrompt,
   lookupSchema,
+  MAX_FOLLOW_UPS,
   MAX_GROUP_FILES,
   MAX_LOOKUPS,
+  orchestratorPrompt,
   PassKind,
   planPrompt,
   planSchema,
@@ -78,19 +82,24 @@ import {
 } from "./prompts";
 import { unitFileIds, unitHunks } from "./units";
 
-// Review pipeline: an orchestrator plans, units review in parallel, the
-// bugs units being agents that explore the repository.
+// Review pipeline: an orchestrator agent leads reviewer agents.
 //
 //   start ─► diff ─► files (skip binary/deleted/ignored)
 //
-//   run: plan (1 call, the orchestrator): overview + groups of files that
-//        interact, each with a focus ─► units = group × pass, split to fit
-//        └ plan fails → groups by directory
-//      ─► units in parallel (≤ model concurrency), findings saved as each ends
-//           bugs pass + tool calling: agent, reads callers, callees, types
-//           else: one call with the group's diffs (+ grepped usages for bugs)
-//      ─► dedupe per file ─► conclusion (1 call, when all units are done)
-//      ─► status
+//   run, model with tool calling:
+//     orchestrator agent ─► explores the repository
+//                        ─► spawn_reviewers: overview + tasks (files,
+//                           objective, out of scope) ─► units run in
+//                           parallel, findings come back to it
+//                        ─► reads doubtful findings ─► reject_findings
+//                        ─► follow-up tasks on leads (bugs only)
+//   run, model without: one planning call (overview + groups) ─► units
+//
+//   files left out of every task ─► grouped by directory ─► units
+//   units: group × pass, split to fit; bugs pass with tool calling is an
+//   agent reading callers, callees, types; else one call (+ grepped usages)
+//   ─► dedupe per file ─► conclusion (1 call, when all units are done)
+//   ─► status
 //
 // Units persist, so cancel, crash or failure resume with only what's left.
 // Files without units (new review, re-review) are planned on the next run.
@@ -108,6 +117,11 @@ const AGENT_PROMPT_SHARE = 0.35;
 const AGENT_CONTEXT_SHARE = 0.8;
 // Tool rounds per agent unit, the last one being the answer.
 const AGENT_STEPS = 12;
+// Orchestrator tool rounds: exploring, spawning, checking, following up.
+const ORCHESTRATOR_STEPS = 24;
+// Findings listed back to the orchestrator per spawn, most severe first.
+const MAX_REPORTED_FINDINGS = 80;
+const REPORTED_FAILURE_CHARS = 160;
 // Repository map in agent prompts, in characters.
 const AGENT_MAP_CHARS = 4000;
 // Room kept for the overview summary when sizing chunks.
@@ -259,6 +273,212 @@ async function plan(ctx: RunContext, files: ReviewFile[]): Promise<Group[]> {
   }
 }
 
+// The orchestrator agent. Its tools are the repository tools plus its
+// team: spawn_reviewers runs units and reports their findings back,
+// reject_findings drops false positives. Its activity and decisions are
+// stored on the review, for the agents view. Not counted against the
+// model's concurrency: it waits while its reviewers run, so holding a
+// slot would deadlock a model limited to one request.
+async function orchestrate(ctx: RunContext, limit: <T>(task: () => Promise<T>) => Promise<T>, unplanned: ReviewFile[], map: string): Promise<void> {
+  const reviewId = ctx.review.id;
+  const all = filesForReview(reviewId).filter((f) => f.state !== FileState.Skipped);
+  const budget = Math.min(PLAN_BUDGET, Math.floor(ctx.model.model.contextWindow * AGENT_PROMPT_SHARE));
+  const { instructions, prompt } = orchestratorPrompt(
+    ctx.project.description,
+    all.map((f) => parseDiff(f.patch)[0]),
+    unplanned.map((f) => f.path),
+    map,
+    budget,
+  );
+
+  const say = (activity: string | null) => updateReview(reviewId, { activity });
+  const log = (line: string) => appendReviewTrace(reviewId, line);
+  const team = { ctx, limit, map, all, followUps: 0, log, say };
+
+  say("Reading the change");
+  try {
+    const { text, usage } = await generateAgentText(ctx.model.config, {
+      instructions: `${instructions}\n- You have about ${ORCHESTRATOR_STEPS} tool rounds, including waiting for reviewers.`,
+      prompt,
+      tools: { ...repoTools({ project: ctx.project, review: ctx.review }, ToolScope.Review), ...teamTools(team) },
+      budget: { steps: ORCHESTRATOR_STEPS, contextTokens: Math.floor(ctx.model.model.contextWindow * AGENT_CONTEXT_SHARE) },
+      signal: ctx.signal,
+      onTool: (name, input) => {
+        if (name in TEAM_TOOLS) {
+          return;
+        }
+
+        say(toolActivity(name, input));
+        log(`Explored: ${toolActivity(name, input)}`);
+      },
+    });
+    addReviewTokens(reviewId, usage.input, usage.output);
+    if (text.trim()) {
+      log(`Summary: ${text.trim()}`);
+    }
+  } catch (e) {
+    if (ctx.signal.aborted) {
+      return;
+    }
+
+    // Remaining files are reviewed by directory, without briefs.
+    console.error(`Review ${reviewId}: orchestrator failed`, e);
+    log(`Orchestrator stopped: ${errorText(e)}. Remaining files are reviewed by directory.`);
+  } finally {
+    say(null);
+  }
+}
+
+// Names of the orchestrator's own tools, to tell them from repository tools.
+const TEAM_TOOLS = { spawn_reviewers: true, reject_findings: true };
+
+type Team = {
+  ctx: RunContext;
+  limit: <T>(task: () => Promise<T>) => Promise<T>;
+  map: string;
+  all: ReviewFile[];
+  followUps: number;
+  log: (line: string) => void;
+  say: (activity: string | null) => void;
+};
+
+function teamTools(team: Team): Record<keyof typeof TEAM_TOOLS, ChatTool> {
+  return {
+    spawn_reviewers: defineTool({
+      description:
+        "Start reviewer agents, one per task, and wait for them. Returns their findings. Pass the overview on the first call. Call once with every task; later calls are follow-ups.",
+      input: z.object({
+        overview: z.string().nullable().describe("At most 150 words for every reviewer: what the change does, cross-file relationships"),
+        tasks: z
+          .array(
+            z.object({
+              title: z.string().describe("2 to 5 words, e.g. Refund calculation"),
+              files: z.array(z.string()).min(1).describe(`Changed files, paths as listed; at most ${MAX_GROUP_FILES}`),
+              objective: z.string().describe("Self-contained brief: what changed, what could break, where to look, the question to answer"),
+              outOfScope: z.string().nullable().describe("What other reviewers cover"),
+              scope: z.enum(TaskScope).describe('"full" for a first review, "bugs" for a follow-up'),
+            }),
+          )
+          .min(1),
+      }),
+      run: (input) => spawnReviewers(team, input),
+    }),
+    reject_findings: defineTool({
+      description: "Drop findings you checked against the code and found false. They are removed from the report; the reason is logged.",
+      input: z.object({
+        ids: z.array(z.number().int()).min(1).describe("Finding ids, e.g. [12, 15]"),
+        reason: z.string().describe("One line: why the code proves them wrong"),
+      }),
+      run: async ({ ids, reason }) => rejectFindings(team, ids, reason),
+    }),
+  };
+}
+
+type TaskInput = { title: string; files: string[]; objective: string; outOfScope: string | null; scope: TaskScope };
+
+// Runs the tasks' units in parallel, then reports what each found:
+//   ## Refund flow (2 reviewers done)
+//   #12 major R1 src/pay.ts:40 Sign flips — failure: refund(−5) → charges 5 (possible)
+async function spawnReviewers(team: Team, input: { overview: string | null; tasks: TaskInput[] }): Promise<string> {
+  const { ctx } = team;
+  const reviewId = ctx.review.id;
+  if (input.overview?.trim()) {
+    const overview = input.overview.trim();
+    updateReview(reviewId, { summary: overview });
+    ctx.review = { ...ctx.review, summary: overview };
+  }
+
+  const byPath = new Map(team.all.map((f) => [f.path, f]));
+  const unknown: string[] = [];
+  const spawned: { task: TaskInput; units: ReviewUnit[] }[] = [];
+
+  for (const task of input.tasks) {
+    if (task.scope === TaskScope.Bugs && team.followUps >= MAX_FOLLOW_UPS) {
+      unknown.push(`${task.title}: follow-up limit reached (${MAX_FOLLOW_UPS})`);
+      continue;
+    }
+
+    const rows = task.files.flatMap((p) => {
+      const row = byPath.get(p.trim()) ?? team.all.find((f) => f.path.endsWith(`/${p.trim()}`));
+      if (!row) {
+        unknown.push(p);
+      }
+
+      return row ? [row] : [];
+    });
+    if (rows.length === 0) {
+      continue;
+    }
+
+    if (task.scope === TaskScope.Bugs) {
+      team.followUps++;
+    }
+
+    const focus = [task.objective.trim(), task.outOfScope?.trim() ? `Out of scope: ${task.outOfScope.trim()}` : ""].filter(Boolean).join("\n");
+    const title = task.scope === TaskScope.Bugs ? `Follow-up: ${task.title.trim()}` : task.title.trim();
+    const groups: Group[] = [];
+    for (let i = 0; i < rows.length; i += MAX_GROUP_FILES) {
+      groups.push({ title, focus, files: rows.slice(i, i + MAX_GROUP_FILES) });
+    }
+
+    const units = planUnits(ctx.review, ctx.project, ctx.snapshot, ctx.model, groups, task.scope);
+    spawned.push({ task, units });
+    // Files and brief show on the reviewer's row in the agents view.
+    team.log(`Spawned "${title}" (${task.scope}, ${rows.length} ${rows.length === 1 ? "file" : "files"})`);
+  }
+
+  const units = spawned.flatMap((s) => s.units);
+  team.say(`Waiting for ${units.length} ${units.length === 1 ? "reviewer" : "reviewers"}`);
+  await Promise.all(units.map((u) => team.limit(() => runUnit(ctx, u, team.map))));
+  finishFiles(reviewId, new Set(units.flatMap(unitFileIds)));
+  team.say("Checking the findings");
+
+  const sections = spawned.map(({ task, units: own }) => taskReport(task, own));
+  const problems = unknown.length > 0 ? `\n\nNot started: ${unknown.join(", ")} (not among the changed files).` : "";
+  return (sections.join("\n\n") || "No task started.") + problems;
+}
+
+function taskReport(task: TaskInput, units: ReviewUnit[]): string {
+  const ids = new Set(units.map((u) => u.id));
+  const failed = unitsForReview(units[0]?.reviewId ?? 0).filter((u) => ids.has(u.id) && u.status === UnitStatus.Failed);
+  const found = findingsForReview(units[0]?.reviewId ?? 0)
+    .filter((f) => f.unitId !== null && ids.has(f.unitId) && f.status === FindingStatus.Open)
+    .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
+
+  const lines = found.slice(0, MAX_REPORTED_FINDINGS).map((f) => {
+    const failure = f.failure ? ` · failure: ${f.failure.slice(0, REPORTED_FAILURE_CHARS)}` : "";
+    const confidence = f.confidence ? ` (${f.confidence})` : "";
+    return `#${f.id} ${f.severity} ${ruleKey(f.ruleId)} ${f.path}:${f.startLine} ${f.title}${failure}${confidence}`;
+  });
+  if (found.length > MAX_REPORTED_FINDINGS) {
+    lines.push(`… ${found.length - MAX_REPORTED_FINDINGS} more, less severe`);
+  }
+
+  const status = failed.length > 0 ? `${failed.length} of ${units.length} reviewers failed` : `${units.length} reviewers done`;
+  return `## ${task.title} (${status})\n${lines.join("\n") || "No findings."}`;
+}
+
+function rejectFindings(team: Team, ids: number[], reason: string): string {
+  const reviewId = team.ctx.review.id;
+  const open = new Map(
+    findingsForReview(reviewId)
+      .filter((f) => f.status === FindingStatus.Open)
+      .map((f) => [f.id, f]),
+  );
+  const rejected = ids.filter((id) => open.has(id));
+  const missing = ids.filter((id) => !open.has(id));
+
+  deleteFindings(rejected);
+  for (const id of rejected) {
+    const f = open.get(id)!;
+    team.log(`Rejected #${id} (${f.path}:${f.startLine} ${f.title}): ${reason.trim()}`);
+  }
+
+  team.say("Checking the findings");
+  const done = rejected.length > 0 ? `Rejected ${rejected.map((id) => `#${id}`).join(", ")}.` : "Nothing rejected.";
+  return missing.length > 0 ? `${done} Not open findings of this review: ${missing.map((id) => `#${id}`).join(", ")}.` : done;
+}
+
 // Planner groups mapped to file rows: unknown paths and repeats dropped,
 // oversized groups split, leftovers grouped by directory.
 function groupsFromPlan(planned: { title: string; files: string[]; focus: string }[], files: ReviewFile[]): Group[] {
@@ -299,19 +519,33 @@ function directoryGroups(files: ReviewFile[]): Group[] {
   });
 }
 
+// What a group is reviewed for: every pass, or bugs only (follow-ups).
+enum TaskScope {
+  Full = "full",
+  Bugs = "bugs",
+}
+
 // Units for each group: one per pass, split so each prompt fits the model.
 //   passes: Bugs alone; custom categories together, or one pass each when
 //   their rule count exceeds the threshold.
 //   split: the group's files packed by diff size; a file too big alone is
 //   chunked by hunks.
-function planUnits(review: Review, project: Project, snapshot: RulesSnapshot, model: ResolvedModel, groups: Group[]): void {
+function planUnits(
+  review: Review,
+  project: Project,
+  snapshot: RulesSnapshot,
+  model: ResolvedModel,
+  groups: Group[],
+  scope: TaskScope,
+): ReviewUnit[] {
   const threshold = getSettings().passThreshold;
   const window = model.model.contextWindow;
 
   const units = groups.flatMap((group) => {
     const categories = snapshot.categories.filter((c) => group.files.some((f) => appliesTo(c, f.path)));
 
-    return passes(categories, threshold).flatMap((pass) => {
+    const wanted = passes(categories, threshold).filter((p) => scope === TaskScope.Full || p.categories.some((c) => c.kind === CategoryKind.Bugs));
+    return wanted.flatMap((pass) => {
       const files = group.files.filter((f) => pass.categories.some((c) => appliesTo(c, f.path)));
       const agent = model.model.toolCalling && pass.categories.some((c) => c.kind === CategoryKind.Bugs);
       const share = agent ? AGENT_PROMPT_SHARE : PROMPT_SHARE;
@@ -327,12 +561,13 @@ function planUnits(review: Review, project: Project, snapshot: RulesSnapshot, mo
         categoryIds: JSON.stringify(pass.categories.map((c) => c.id)),
         chunk: pack.chunk,
         hunks: JSON.stringify(pack.files.length > 1 ? Object.fromEntries(pack.files.map((f) => [f.id, pack.hunks.get(f.id)])) : pack.hunks.get(pack.files[0].id)),
+        agent,
         status: UnitStatus.Pending,
       }));
     });
   });
 
-  insertUnits(units);
+  return insertUnits(units);
 }
 
 type Pack = { files: ReviewFile[]; hunks: Map<number, number[]>; chunk: number };
@@ -455,27 +690,38 @@ async function run(reviewId: number, signal: AbortSignal): Promise<void> {
   // Every call of this review counts against the model's cap.
   const limit = modelLimiter(ctx.model.model.id, ctx.model.model.maxConcurrency);
 
+  const map = ctx.model.model.toolCalling ? await repoMap({ project, review }, AGENT_MAP_CHARS) : "";
+
   // Queued files without units: new review, or re-review of changed files.
   const planned = new Set(unitsForReview(reviewId).flatMap(unitFileIds));
   const unplanned = filesForReview(reviewId).filter((f) => f.state === FileState.Queued && !planned.has(f.id));
   if (unplanned.length > 0) {
-    const groups = await limit(() => plan(ctx, unplanned));
+    if (ctx.model.model.toolCalling) {
+      await orchestrate(ctx, limit, unplanned, map);
+    } else {
+      const groups = await limit(() => plan(ctx, unplanned));
+      planUnits(ctx.review, project, ctx.snapshot, ctx.model, groups, TaskScope.Full);
+    }
+
     if (signal.aborted) {
-      updateReview(reviewId, { status: ReviewStatus.Canceled, finishedAt: new Date() });
+      requeueRunningUnits(reviewId);
+      updateReview(reviewId, { status: ReviewStatus.Canceled, activity: null, finishedAt: new Date() });
       return;
     }
 
-    planUnits(ctx.review, project, ctx.snapshot, ctx.model, groups);
+    // Files no task covered, grouped by directory.
+    const tasked = new Set(unitsForReview(reviewId).flatMap(unitFileIds));
+    const leftover = unplanned.filter((f) => !tasked.has(f.id));
+    planUnits(ctx.review, project, ctx.snapshot, ctx.model, directoryGroups(leftover), TaskScope.Full);
 
     // No pass applies, e.g. every category's globs exclude the file.
     const covered = new Set(unitsForReview(reviewId).flatMap(unitFileIds));
-    for (const f of unplanned.filter((f) => !covered.has(f.id))) {
+    for (const f of leftover.filter((f) => !covered.has(f.id))) {
       updateFile(f.id, { state: FileState.Skipped, skipReason: "No rules apply to this file" });
     }
   }
 
   const pending = unitsForReview(reviewId).filter((u) => u.status === UnitStatus.Pending);
-  const map = pending.length > 0 && ctx.model.model.toolCalling ? await repoMap({ project, review }, AGENT_MAP_CHARS) : "";
   await Promise.all(pending.map((u) => limit(() => runUnit(ctx, u, map))));
 
   const touched = new Set(pending.flatMap(unitFileIds));
@@ -543,7 +789,7 @@ async function runUnit(ctx: RunContext, unit: ReviewUnit, map: string): Promise<
     return;
   }
 
-  updateUnit(unit.id, { status: UnitStatus.Running, error: null, activity: null });
+  updateUnit(unit.id, { status: UnitStatus.Running, error: null, activity: null, steps: "" });
 
   try {
     const files = await unitFiles(ctx, unit);
@@ -554,7 +800,7 @@ async function runUnit(ctx: RunContext, unit: ReviewUnit, map: string): Promise<
     const ids: number[] = JSON.parse(unit.categoryIds);
     const categories = ctx.snapshot.categories.filter((c) => ids.includes(c.id));
     const kind = categories.some((c) => c.kind === CategoryKind.Bugs) ? PassKind.Bugs : PassKind.Rules;
-    const agentic = kind === PassKind.Bugs && ctx.model.model.toolCalling;
+    const agentic = unit.agent && kind === PassKind.Bugs && ctx.model.model.toolCalling;
 
     const result = agentic
       ? await agentReview(ctx, unit, files, categories, map).catch((e: unknown) => {
@@ -643,7 +889,11 @@ async function agentReview(
     tools: repoTools({ project: ctx.project, review: ctx.review }, ToolScope.Review),
     budget: { steps: AGENT_STEPS, contextTokens: Math.floor(ctx.model.model.contextWindow * AGENT_CONTEXT_SHARE) },
     signal: ctx.signal,
-    onTool: (name, input) => updateUnit(unit.id, { activity: toolActivity(name, input) }),
+    onTool: (name, input) => {
+      const step = toolActivity(name, input);
+      updateUnit(unit.id, { activity: step });
+      appendUnitStep(unit.id, step);
+    },
   });
 
   const steps = trace.length > 0 ? trace.map((t) => `- ${t}`).join("\n") : "(none)";
@@ -677,6 +927,10 @@ async function directReview(
   kind: PassKind,
 ): Promise<UnitResult> {
   updateUnit(unit.id, { activity: kind === PassKind.Bugs ? "Looking up usages" : "Waiting for the model" });
+  if (kind === PassKind.Bugs) {
+    appendUnitStep(unit.id, "Looking up usages of what the diff changes");
+  }
+
   const lookup = kind === PassKind.Bugs ? await lookupUsages(ctx, files) : { usages: "", usage: NO_USAGE };
 
   const { instructions, prompt } = unitPrompt({
@@ -1007,6 +1261,7 @@ export function rereviewChanged(reviewId: number): number {
 
   // Planned again on launch, with a fresh overview.
   updateReview(reviewId, { summary: "", conclusion: "" });
+  appendReviewTrace(reviewId, `Re-review of ${changed.length} changed ${changed.length === 1 ? "file" : "files"}`);
   launch(reviewId);
   return changed.length;
 }

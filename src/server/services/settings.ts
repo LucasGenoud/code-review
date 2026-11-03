@@ -92,7 +92,8 @@ export function saveSettings(input: AppSettings): void {
 
 // In pipeline order, as Settings lists them.
 const PROMPT_INFO: { key: PromptKey; label: string; help: string }[] = [
-  { key: PromptKey.Overview, label: "Review plan", help: "One call per review: writes the change overview and groups related files to review together. The JSON format is appended automatically." },
+  { key: PromptKey.Orchestrator, label: "Orchestrator", help: "Models with tool calling: the lead agent that explores the change, briefs reviewer agents, checks their findings and follows up." },
+  { key: PromptKey.Overview, label: "Review plan", help: "Models without tool calling: one call writes the change overview and groups related files. The JSON format is appended automatically." },
   { key: PromptKey.Review, label: "Review", help: "Base instructions of every unit (a file or a group of files). The JSON format is appended automatically." },
   { key: PromptKey.Bugs, label: "Bugs pass", help: "Added to Review for the built-in Bugs category." },
   { key: PromptKey.Rules, label: "Rules pass", help: "Added to Review for rule categories." },

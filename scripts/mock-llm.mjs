@@ -151,6 +151,36 @@ function completion(body) {
   return plain(system, prompt);
 }
 
+// Orchestrator agent: spawns one task per directory, rejects the first
+// finding reported back, then summarizes. One step per request.
+function orchestratorTurn(body) {
+  const results = body.messages.filter((m) => m.role === "tool").map((m) => text(m.content));
+  const prompt = body.messages.filter((m) => m.role === "user").map((m) => text(m.content)).join("\n");
+
+  if (results.length === 0) {
+    const plan = reviewPlan(prompt);
+    const tasks = plan.groups.map((g) => ({
+      title: g.title,
+      files: g.files,
+      objective: "Check how these files use each other (mock brief).",
+      outOfScope: null,
+      scope: "full",
+    }));
+    return toolCall("spawn_reviewers", { overview: plan.overview, tasks });
+  }
+
+  const firstId = /#(\d+) /.exec(results[0])?.[1];
+  if (results.length === 1 && firstId) {
+    return toolCall("reject_findings", { ids: [Number(firstId)], reason: "Mock check: the code handles this case." });
+  }
+
+  return { content: "Mock orchestrator: one task per directory; rejected one finding after reading the code." };
+}
+
+function toolCall(name, args) {
+  return { tool_calls: [{ id: `call-${Date.now()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] };
+}
+
 function chatAnswer(body) {
   const last = [...body.messages].reverse().find((m) => m.role === "user");
   const question = text(last?.content).slice(0, 120);
@@ -198,6 +228,21 @@ const server = http.createServer(async (req, res) => {
 
   if (body.stream) {
     await stream(res, body, body.tools ? chatAnswer(body) : completion(body));
+    return;
+  }
+
+  const orchestrating = (body.tools ?? []).some((t) => t.function?.name === "spawn_reviewers");
+  if (orchestrating) {
+    const turn = orchestratorTurn(body);
+    const message = { role: "assistant", content: turn.content ?? null, ...(turn.tool_calls ? { tool_calls: turn.tool_calls } : {}) };
+    res.writeHead(HTTP_OK, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: `mock-${Date.now()}`,
+      object: "chat.completion",
+      model: MODEL,
+      choices: [{ index: 0, message, finish_reason: turn.tool_calls ? "tool_calls" : "stop" }],
+      usage: usage(body, JSON.stringify(turn)),
+    }));
     return;
   }
 

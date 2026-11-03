@@ -113,9 +113,16 @@ describe("review pipeline", () => {
     expect(report.files.map((f) => f.path)).toEqual(["app.py", "new.py"]);
     expect(report.files.every((f) => f.state === FileState.Reviewed)).toBe(true);
     expect(report.units.every((u) => u.status === UnitStatus.Done)).toBe(true);
-    // Both files in one planned group: bugs pass + rules pass (Python pack).
+    // The orchestrator put both files in one task: bugs agent + rules check.
     expect(report.units).toHaveLength(2);
     expect(report.units.every((u) => u.fileIds.length === 2 && u.title === "Mock group root")).toBe(true);
+    expect(report.units.filter((u) => u.agent)).toHaveLength(1);
+    // It logged the task, rejected one finding, and summarized.
+    const log = report.orchestrator.log;
+    expect(log).toContain('Spawned "Mock group root" (full, 2 files)');
+    expect(log.filter((l) => l.startsWith("Rejected #"))).toHaveLength(1);
+    expect(log.at(-1)).toMatch(/^Summary: Mock orchestrator/);
+    expect(report.orchestrator.activity).toBeNull();
     expect(report.findings.length).toBeGreaterThan(0);
     expect(report.review.cost).toBeGreaterThan(0);
 

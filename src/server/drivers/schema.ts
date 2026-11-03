@@ -167,6 +167,10 @@ export const reviews = sqliteTable("reviews", {
   summary: text("summary").notNull().default(""),
   // Markdown recap of the findings, written once the review is done.
   conclusion: text("conclusion").notNull().default(""),
+  // What the orchestrator is doing now, e.g. "Waiting for 4 reviewers".
+  activity: text("activity"),
+  // Orchestrator log, one line per decision, e.g. "Rejected #12: …".
+  trace: text("trace").notNull().default(""),
   // JSON RulesSnapshot: rules as they were when the review ran.
   rules: text("rules").notNull(),
   inputTokens: integer("input_tokens").notNull().default(0),
@@ -213,6 +217,10 @@ export const reviewUnits = sqliteTable("review_units", {
   focus: text("focus"),
   // What the unit's agent is doing now, e.g. "Reading src/pay.ts:40-90".
   activity: text("activity"),
+  // Runs as an agent with repository tools, else as one call.
+  agent: integer("agent", { mode: "boolean" }).notNull().default(false),
+  // Agent step log, one line per tool call, e.g. "Reading src/pay.ts:40-90".
+  steps: text("steps").notNull().default(""),
   status: text("status", { enum: values(UnitStatus) }).notNull().$type<UnitStatus>(),
   error: text("error"),
   // Exact prompt sent, for the prompt preview.

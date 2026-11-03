@@ -55,6 +55,15 @@ export function addReviewTokens(id: number, input: number, output: number): void
     .run();
 }
 
+// Adds a line to the orchestrator log.
+export function appendReviewTrace(id: number, line: string): void {
+  getDb()
+    .update(reviews)
+    .set({ trace: sql`${reviews.trace} || ${`${line}\n`}` })
+    .where(eq(reviews.id, id))
+    .run();
+}
+
 export function deleteReview(id: number): void {
   getDb().delete(reviews).where(eq(reviews.id, id)).run();
 }
@@ -135,6 +144,15 @@ export function updateUnit(id: number, patch: Partial<UnitInput>): void {
 export function deleteUnitsForFile(fileId: number): void {
   const inGroup = sql`exists (select 1 from json_each(${reviewUnits.fileIds}) where value = ${fileId})`;
   getDb().delete(reviewUnits).where(or(eq(reviewUnits.fileId, fileId), inGroup)).run();
+}
+
+// Adds a line to a unit's step log.
+export function appendUnitStep(id: number, line: string): void {
+  getDb()
+    .update(reviewUnits)
+    .set({ steps: sql`${reviewUnits.steps} || ${`${line}\n`}` })
+    .where(eq(reviewUnits.id, id))
+    .run();
 }
 
 // Units left `running` by a crash or cancel go back to the queue.

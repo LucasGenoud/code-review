@@ -14,6 +14,7 @@ import {
   reopenFinding,
   undoFix,
   type Finding,
+  type OrchestratorView,
   type Report,
   type ReviewProgress,
   type UnitView,
@@ -23,6 +24,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { FindingStatus, ReviewStatus } from "@/lib/domain";
+import { AgentsPanel } from "./agents-panel";
 import { FileDiff } from "./file-diff";
 import { FileList } from "./file-list";
 import { FindingsPanel } from "./findings-panel";
@@ -86,8 +88,8 @@ type Props = {
 export function ReportView({ report: loaded, chat, canVerify }: Props) {
   const reviewId = loaded.review.id;
   const running = loaded.running || loaded.review.status === ReviewStatus.Running;
-  const units = useLiveUnits(loaded, running);
-  const report = { ...loaded, units };
+  const { units, orchestrator } = useLiveProgress(loaded, running);
+  const report = { ...loaded, units, orchestrator };
   const theme = useDiffTheme();
 
   // Lookups from the rules snapshot the review ran with.
@@ -109,6 +111,7 @@ export function ReportView({ report: loaded, chat, canVerify }: Props) {
   const [chatOpen, setChatOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const [filesWidth, setFilesWidth] = useState(FILES_WIDTH.initial);
   const [findingsWidth, setFindingsWidth] = useState(FINDINGS_WIDTH.initial);
   const chatRef = useRef<ChatHandle>(null);
@@ -245,7 +248,7 @@ export function ReportView({ report: loaded, chat, canVerify }: Props) {
 
   // Single-key shortcuts; ignored while typing or with a dialog open.
   const onKey = useEffectEvent((e: KeyboardEvent) => {
-    if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target) || chatOpen || helpOpen || panelOpen) {
+    if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target) || chatOpen || helpOpen || panelOpen || agentsOpen) {
       return;
     }
 
@@ -256,6 +259,7 @@ export function ReportView({ report: loaded, chat, canVerify }: Props) {
       a: () => selected?.replacement != null && apply(selected.id),
       d: () => selected && setDismissingId(selected.id),
       c: () => setChatOpen(true),
+      g: () => setAgentsOpen(true),
       r: () => !running && refresh(),
       "?": () => setHelpOpen(true),
     };
@@ -317,9 +321,12 @@ export function ReportView({ report: loaded, chat, canVerify }: Props) {
           onRefresh={refresh}
           onOpenChat={() => setChatOpen(true)}
           onOpenFindings={() => setPanelOpen(true)}
+          onOpenAgents={() => setAgentsOpen(true)}
           openCount={openCount}
         />
-        {running && <LiveActivity units={units} files={report.files} />}
+        {running && (
+          <LiveActivity units={units} files={report.files} orchestrator={orchestrator} onOpenAgents={() => setAgentsOpen(true)} />
+        )}
 
         <div
           className="relative grid min-h-0 flex-1 lg:grid-cols-[var(--files-w)_minmax(0,1fr)] xl:grid-cols-[var(--files-w)_minmax(0,1fr)_var(--findings-w)]"
@@ -395,12 +402,22 @@ export function ReportView({ report: loaded, chat, canVerify }: Props) {
         onCite={select}
         onOpenFile={openFile}
       />
+      <AgentsPanel
+        open={agentsOpen}
+        onOpenChange={setAgentsOpen}
+        running={running}
+        orchestrator={orchestrator}
+        units={units}
+        files={report.files}
+        findings={findings}
+        onSelectFinding={select}
+      />
       <ShortcutsDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </ReportContext>
   );
 }
 
-// Unit states of a running review, polled from the progress route. The
+// Unit and orchestrator states of a running review, polled from the progress route. The
 // full report reloads only when its version changes (new findings, files
 // done, summaries written): diffs stay still while units progress.
 //
@@ -409,7 +426,7 @@ export function ReportView({ report: loaded, chat, canVerify }: Props) {
 //
 // Polled units are used only while they match the loaded report's
 // version, so a report loaded by an action (e.g. Retry) wins over them.
-function useLiveUnits(report: Report, running: boolean): UnitView[] {
+function useLiveProgress(report: Report, running: boolean): { units: UnitView[]; orchestrator: OrchestratorView } {
   const router = useRouter();
   const [progress, setProgress] = useState<ReviewProgress | null>(null);
   const [reloading, startReload] = useTransition();
@@ -454,7 +471,8 @@ function useLiveUnits(report: Report, running: boolean): UnitView[] {
     };
   }, [running, reviewId, router]);
 
-  return progress && progress.version === report.version ? progress.units : report.units;
+  const live = progress && progress.version === report.version ? progress : report;
+  return { units: live.units, orchestrator: live.orchestrator };
 }
 
 async function fetchProgress(reviewId: number): Promise<ReviewProgress | null> {

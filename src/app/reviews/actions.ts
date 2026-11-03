@@ -10,7 +10,7 @@ import { attempt } from "../result";
 // Review report API: report data, review control and finding actions.
 // Chat streaming and Markdown export are route handlers under /api/reviews.
 
-export type { Finding, Report, ReviewFile, ReviewProgress, RulesSnapshot, UnitView } from "@/server/services/reviews";
+export type { Finding, OrchestratorView, Report, ReviewFile, ReviewProgress, RulesSnapshot, UnitView } from "@/server/services/reviews";
 
 export async function getReport(id: number) {
   await connection();

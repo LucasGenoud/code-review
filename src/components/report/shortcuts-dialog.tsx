@@ -11,6 +11,7 @@ const SHORTCUTS: [string, string][] = [
   ["A", "Apply fix of the selected finding"],
   ["D", "Dismiss the selected finding"],
   ["C", "Open chat"],
+  ["G", "Open agents: who reviews what"],
   ["R", "Refresh diff from disk"],
   ["?", "Show shortcuts"],
 ];

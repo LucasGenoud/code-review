@@ -154,13 +154,28 @@ export async function generateAgentObject<T extends z.ZodType>(
   cfg: ModelConfig,
   req: AgentRequest<T>,
 ): Promise<{ object: z.infer<T>; usage: Usage; trace: string[] }> {
+  const { result, trace } = await toolLoop(cfg, req, Output.object({ schema: req.schema }));
+  return { object: result.output as z.infer<T>, usage: toUsage(result.totalUsage), trace };
+}
+
+// A tool loop ending in plain text, e.g. an agent that acts through its
+// tools and only reports at the end.
+export async function generateAgentText(
+  cfg: ModelConfig,
+  req: Omit<AgentRequest<z.ZodType>, "schema">,
+): Promise<{ text: string; usage: Usage; trace: string[] }> {
+  const { result, trace } = await toolLoop(cfg, req, undefined);
+  return { text: result.text, usage: toUsage(result.totalUsage), trace };
+}
+
+async function toolLoop(cfg: ModelConfig, req: Omit<AgentRequest<z.ZodType>, "schema">, output: Parameters<typeof generateText>[0]["output"]) {
   const trace: string[] = [];
   const result = await generateText({
     model: languageModel(cfg),
     instructions: req.instructions,
     prompt: req.prompt,
     tools: toolSet(req.tools),
-    output: Output.object({ schema: req.schema }),
+    output,
     stopWhen: stepCountIs(req.budget.steps),
     prepareStep: ({ stepNumber, steps }) => finalStep(stepNumber, steps, req.budget, req.instructions),
     maxOutputTokens: cfg.maxOutputTokens ?? undefined,
@@ -171,7 +186,7 @@ export async function generateAgentObject<T extends z.ZodType>(
     },
   });
 
-  return { object: result.output as z.infer<T>, usage: toUsage(result.totalUsage), trace };
+  return { result, trace };
 }
 
 function toolSet(tools: Record<string, ChatTool>): ToolSet {

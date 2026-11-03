@@ -53,6 +53,10 @@ export type UnitView = {
   focus: string | null;
   // What its agent is doing, e.g. "Reading src/pay.ts:40-90".
   activity: string | null;
+  // An agent with repository tools, else one call.
+  agent: boolean;
+  // Agent steps so far, e.g. ["Reading balance", "Finding usages of balance"].
+  steps: string[];
   pass: string;
   chunk: number;
   status: UnitStatus;
@@ -68,6 +72,7 @@ export type Report = {
   files: ReviewFile[];
   findings: Finding[];
   units: UnitView[];
+  orchestrator: OrchestratorView;
   running: boolean;
   undoableFixes: number[];
   // See ReviewProgress.version.
@@ -81,8 +86,12 @@ export type ReviewProgress = {
   running: boolean;
   status: ReviewStatus;
   units: UnitView[];
+  orchestrator: OrchestratorView;
   version: string;
 };
+
+// The lead agent: what it does now, and its decisions so far.
+export type OrchestratorView = { activity: string | null; log: string[] };
 
 // Paths named in a review label; the rest are counted.
 const LABEL_PATHS = 3;
@@ -139,6 +148,7 @@ export function getReport(reviewId: number): Report {
     files: filesForReview(reviewId),
     findings,
     units: unitsForReview(reviewId).map(unitView),
+    orchestrator: orchestratorView(review),
     running: isRunning(reviewId),
     undoableFixes: undoableFixes(reviewId),
     version: reportVersion(review),
@@ -151,8 +161,13 @@ export function reviewProgress(reviewId: number): ReviewProgress {
     running: isRunning(reviewId),
     status: review.status,
     units: unitsForReview(reviewId).map(unitView),
+    orchestrator: orchestratorView(review),
     version: reportVersion(review),
   };
+}
+
+function orchestratorView(review: Review): OrchestratorView {
+  return { activity: review.activity, log: review.trace.split("\n").filter(Boolean) };
 }
 
 function unitView(u: ReviewUnit): UnitView {
@@ -162,6 +177,8 @@ function unitView(u: ReviewUnit): UnitView {
     title: u.title,
     focus: u.focus,
     activity: u.activity,
+    agent: u.agent,
+    steps: u.steps.split("\n").filter(Boolean),
     pass: u.pass,
     chunk: u.chunk,
     status: u.status,

@@ -1,19 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, Clock, Loader2, Sparkles } from "lucide-react";
-import type { ReviewFile, UnitView } from "@/app/reviews/actions";
+import { Bot, ChevronRight, Clock, Compass, Loader2 } from "lucide-react";
+import type { OrchestratorView, ReviewFile, UnitView } from "@/app/reviews/actions";
+import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { UnitStatus } from "@/lib/domain";
 import { fileAnchor, isFinished, unitName } from "./report-lib";
 
 // What a running review is doing, under the report header:
 //
+//   ◎ Orchestrator: Waiting for 4 reviewers                    [Agents]
 //   ⟳ Now reviewing 2 · 12/40 done                          ▸ Up next (26)
 //     [Bugs]  Refund flow · pay.ts, invoice.ts      Reading money.ts:1-80
 //     [Rules] handler.ts                            Waiting for the model
-//
-// Before any unit exists the orchestrator is planning the review.
 
 // Queued units listed when expanded; the rest are counted.
 const QUEUE_SHOWN = 30;
@@ -21,36 +21,42 @@ const QUEUE_SHOWN = 30;
 type Props = {
   units: UnitView[];
   files: ReviewFile[];
+  orchestrator: OrchestratorView;
+  onOpenAgents: () => void;
 };
 
-export function LiveActivity({ units, files }: Props) {
+export function LiveActivity({ units, files, orchestrator, onOpenAgents }: Props) {
   const [queueOpen, setQueueOpen] = useState(false);
   const paths = new Map(files.map((f) => [f.id, f.path]));
   const running = units.filter((u) => u.status === UnitStatus.Running);
   const queued = units.filter((u) => u.status === UnitStatus.Pending);
   const done = units.filter(isFinished).length;
 
-  if (units.length === 0) {
-    return (
-      <Strip>
-        <Sparkles className="size-3.5 text-primary" aria-hidden />
-        <span className="font-medium text-foreground">Planning the review</span>
-        <span>reading the change and grouping related files…</span>
-      </Strip>
-    );
-  }
+  const lead = (
+    <div className="flex items-center gap-2 px-4 pt-2 text-xs">
+      <Compass className="size-3.5 shrink-0 text-primary" aria-hidden />
+      <span className="font-medium">Orchestrator</span>
+      <span className="min-w-0 truncate text-muted-foreground">
+        {orchestrator.activity ?? (units.length === 0 ? "Planning the review…" : running.length + queued.length > 0 ? "Reviewers at work" : "Writing the review summary…")}
+      </span>
+      <Button size="xs" variant="ghost" className="ml-auto shrink-0" onClick={onOpenAgents}>
+        <Bot />
+        Agents
+      </Button>
+    </div>
+  );
 
   if (running.length === 0 && queued.length === 0) {
     return (
-      <Strip>
-        <Loader2 className="size-3.5 animate-spin" aria-hidden />
-        <span>Writing the review summary…</span>
-      </Strip>
+      <div className="border-b bg-muted/30 pb-2" aria-live="polite" aria-label="Review activity">
+        {lead}
+      </div>
     );
   }
 
   return (
     <div className="border-b bg-muted/30 text-xs" aria-live="polite" aria-label="Review activity">
+      {lead}
       <Collapsible open={queueOpen} onOpenChange={setQueueOpen}>
         <div className="flex items-center gap-2 px-4 pt-2">
           <Loader2 className="size-3.5 animate-spin text-primary" aria-hidden />
@@ -87,14 +93,6 @@ export function LiveActivity({ units, files }: Props) {
   );
 }
 
-function Strip({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground" aria-live="polite">
-      {children}
-    </p>
-  );
-}
-
 // position: place in the queue; absent for running units.
 function UnitRow({ unit, paths, position }: { unit: UnitView; paths: Map<number, string>; position?: number }) {
   const names = unit.fileIds.map((id) => paths.get(id) ?? "?");
@@ -107,7 +105,10 @@ function UnitRow({ unit, paths, position }: { unit: UnitView; paths: Map<number,
       ) : (
         <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />
       )}
-      <span className="shrink-0 rounded bg-muted px-1.5 py-px text-[11px] font-medium">{unit.pass}</span>
+      <span className="flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-px text-[11px] font-medium">
+        {unit.agent && <Bot className="size-3" aria-hidden />}
+        {unit.pass}
+      </span>
       <button
         type="button"
         title={[unit.focus, ...names].filter(Boolean).join("\n")}

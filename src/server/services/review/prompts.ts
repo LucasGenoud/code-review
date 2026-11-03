@@ -51,10 +51,62 @@ export const planSchema = z.object({
 });
 
 export function planPrompt(description: string, files: ParsedFile[], budget: number) {
-  const head = section("Project", description || "(no description)");
+  return {
+    instructions: instruction(PromptKey.Overview) + PLAN_JSON_SHAPE,
+    prompt: section("Project", description || "(no description)") + changeDigest(files, budget),
+  };
+}
 
-  // File list first: every file must be grouped. Cut to half the budget
-  // for very large changes; unlisted files are grouped by directory.
+// --- orchestrator agent ----------------------------------------------------
+
+// Models with tool calling get an orchestrator agent instead of the single
+// planning call: it explores, delegates tasks to reviewer agents, checks
+// what they report, and follows up on leads.
+//
+//   explore ─► spawn_reviewers(overview, tasks) ─► findings come back
+//          ─► read doubtful ones ─► reject_findings ─► follow-up tasks ─► done
+//
+// Prompt built on what makes orchestrators work: self-contained briefs
+// (objective, where to look, what is out of scope), effort scaled to the
+// change, few well-chosen agents, and verification before trusting output.
+export const MAX_FOLLOW_UPS = 3;
+
+const ORCHESTRATOR_INSTRUCTIONS = `You lead the review of a code change. You plan the review, delegate it to reviewer agents, and check their work. You don't write findings yourself.
+
+## Your team
+Each reviewer you spawn gets your overview, one task (title, files, objective, out of scope), the full diffs and new versions of its files, the project's rules, and read-only tools over the reviewed version of the repository. Scope "full" runs a bug-hunting agent plus the rule checks on the task's files; scope "bugs" runs the bug-hunting agent only, for follow-ups on files already reviewed. Reviewers can't see each other or you: everything a reviewer needs must be in its task.
+
+## How to work
+1. Size the change from the file list and diff below. Small (one to three files, one concern): one task, little or no exploration. Medium: two to five tasks. Large: one task per cohesive area.
+2. Explore only what the grouping needs: what the changed code touches outside the diff (callers of changed functions, shared types, configuration). A few calls, batched in one step.
+3. Spawn every task in one spawn_reviewers call, with the overview. Cover every changed file listed: files you leave out are reviewed by directory, without your guidance.
+   - Group files where a bug could hide in their interaction: a function and its callers, a schema and its queries, an interface and its implementations, code and its tests. At most ${MAX_GROUP_FILES} files per task.
+   - Write each objective as a brief to a colleague who knows nothing else: what changed, what could break, where to look, the question to answer. e.g. "balance() now returns cents instead of francs. Check that every caller in PaymentService and ReportService still compares and formats cents: a mismatch charges 100× too much or too little."
+   - Use out of scope to stop reviewers duplicating each other, e.g. "CSV formatting: another reviewer covers it."
+4. Check the findings that come back. Read the code behind any doubtful one: confidence "possible", a claim about code the reviewer didn't quote, a severity that looks off, or two findings that contradict each other. Reject false positives with reject_findings and a one-line reason. Keep what you can't disprove.
+5. Follow up only on concrete leads: an interaction between two tasks' files that no reviewer could see, or a finding that implies the same bug elsewhere. At most ${MAX_FOLLOW_UPS} follow-up tasks, scope "bugs", each with a precise objective.
+6. Finish with two or three sentences: how you split the work, what you rejected and why, what you followed up.
+
+## Principles
+- Spend effort in proportion to risk: security, money, data integrity, concurrency and public contracts deserve depth; renames, docs and formatting don't.
+- Few, well-briefed reviewers beat many vague ones. Never spawn more tasks than the change needs.
+- Batch independent tool calls in one step.`;
+
+export function orchestratorPrompt(description: string, files: ParsedFile[], unreviewed: string[], map: string, budget: number) {
+  const todo = unreviewed.length === files.length
+    ? ""
+    : section("Files to review now", `${unreviewed.join("\n")}\n(The other changed files were reviewed already; include them in a task only for a follow-up.)`);
+
+  return {
+    instructions: instruction(PromptKey.Orchestrator),
+    prompt: section("Project", description || "(no description)") + todo + changeDigest(files, budget) + section("Repository map", map),
+  };
+}
+
+// Changed files with line counts, then a diff sample, within `budget`.
+// The list comes first, cut to half the budget for very large changes:
+// unlisted files are grouped by directory.
+function changeDigest(files: ParsedFile[], budget: number): string {
   let listRoom = (budget * CHARS_PER_TOKEN) / 2;
   const listed: string[] = [];
   for (const f of files) {
@@ -71,7 +123,7 @@ export function planPrompt(description: string, files: ParsedFile[], budget: num
   const list = section(`Changed files (${files.length})`, listed.join("\n"));
 
   // Sample of the diff, cut to the budget.
-  let room = (budget - estimateTokens(head + list)) * CHARS_PER_TOKEN;
+  let room = (budget - estimateTokens(list)) * CHARS_PER_TOKEN;
   const samples: string[] = [];
   for (const f of files) {
     if (room <= 0) {
@@ -83,10 +135,7 @@ export function planPrompt(description: string, files: ParsedFile[], budget: num
     room -= text.length;
   }
 
-  return {
-    instructions: instruction(PromptKey.Overview) + PLAN_JSON_SHAPE,
-    prompt: head + list + section("Diff (may be truncated)", samples.join("\n\n")),
-  };
+  return list + section("Diff (may be truncated)", samples.join("\n\n"));
 }
 
 function countChanges(f: ParsedFile): string {
@@ -119,7 +168,8 @@ const USAGES_INSTRUCTIONS = `- "Usages in other files" shows unchanged code that
 
 // Bugs pass of a model with tool calling: the unit is an agent that
 // explores the repository before answering. Budget appended by the engine.
-const AGENT_INSTRUCTIONS = `You have read-only tools over the reviewed version of the repository. Use them to check what the diff can't show: how callers use a changed function, what a called function really does, whether an empty or null case is handled upstream, what an interface promises.
+const AGENT_INSTRUCTIONS = `You are one reviewer on a team led by an orchestrator. When "Your task" is given, answer its objective first, then check the rest of your files' changes; leave what it marks out of scope to the other reviewers.
+You have read-only tools over the reviewed version of the repository. Use them to check what the diff can't show: how callers use a changed function, what a called function really does, whether an empty or null case is handled upstream, what an interface promises.
 - Start with the riskiest changes: changed signatures, return values, conditions, error handling, shared state.
 - Batch independent calls in one step, e.g. find_usages for two functions and read_symbol for a third. Prefer read_symbol and find_usages over reading whole files. The repository map shows where things are.
 - Stop once the risky changes are checked. Report only what code you read supports.
@@ -259,7 +309,7 @@ export function unitPrompt(u: UnitInput) {
   const core =
     section("Project", u.description || "(no description)") +
     section("Change overview", u.summary || "(none)") +
-    (u.focus ? section("Focus for this group", u.focus) : "") +
+    (u.focus ? section("Your task", u.focus) : "") +
     section("Rules", formatRules(u.categories)) +
     u.files.map((f) => section(`Diff of ${fileLabel(f.file)} (new line numbers on the left)`, formatHunks(f.hunks))).join("") +
     (u.usages ? section("Usages in other files (path:line: match, path-line- context)", u.usages) : "") +
@@ -411,6 +461,7 @@ export enum PromptKey {
   Lookup = "prompt_lookup",
   Usages = "prompt_usages",
   Agent = "prompt_agent",
+  Orchestrator = "prompt_orchestrator",
   Describe = "prompt_describe",
   RuleChanges = "prompt_rule_changes",
   Conclusion = "prompt_conclusion",
@@ -424,6 +475,7 @@ export const PROMPT_DEFAULTS: Record<PromptKey, string> = {
   [PromptKey.Lookup]: LOOKUP_INSTRUCTIONS,
   [PromptKey.Usages]: USAGES_INSTRUCTIONS,
   [PromptKey.Agent]: AGENT_INSTRUCTIONS,
+  [PromptKey.Orchestrator]: ORCHESTRATOR_INSTRUCTIONS,
   [PromptKey.Describe]: DESCRIBE_INSTRUCTIONS,
   [PromptKey.RuleChanges]: RULE_CHANGE_INSTRUCTIONS,
   [PromptKey.Conclusion]: CONCLUSION_INSTRUCTIONS,

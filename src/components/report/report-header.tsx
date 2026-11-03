@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Bot,
   Download,
   ListChecks,
   Loader2,
@@ -47,10 +48,11 @@ type Props = {
   onRefresh: () => void;
   onOpenChat: () => void;
   onOpenFindings: () => void;
+  onOpenAgents: () => void;
   openCount: number;
 };
 
-export function ReportHeader({ report, running, refreshing, onRefresh, onOpenChat, onOpenFindings, openCount }: Props) {
+export function ReportHeader({ report, running, refreshing, onRefresh, onOpenChat, onOpenFindings, onOpenAgents, openCount }: Props) {
   const { review, project } = report;
   const [pending, startTransition] = useTransition();
   const changed = report.files.filter((f) => f.state === FileState.Changed).length;
@@ -128,6 +130,15 @@ export function ReportHeader({ report, running, refreshing, onRefresh, onOpenCha
               Refresh
             </TooltipTrigger>
             <TooltipContent>Re-read the diff from disk (R)</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger render={<Button variant="outline" size="sm" onClick={onOpenAgents} />}>
+              <Bot />
+              Agents
+              {running && <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-label="working" />}
+            </TooltipTrigger>
+            <TooltipContent>Who reviews what, step by step (G)</TooltipContent>
           </Tooltip>
 
           <Button variant="outline" size="sm" className="xl:hidden" onClick={onOpenFindings}>
