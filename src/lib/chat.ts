@@ -20,6 +20,8 @@ export type ChatMetadata = {
   // Tokens the model sees on the next turn, e.g. 12_400 of a 200k window.
   context?: number;
   stop?: ChatStop;
+  // Times the turn was continued after stopping short (see streamChat).
+  nudges?: number;
   summary?: boolean;
 };
 

@@ -1,12 +1,11 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { DiffMode, UnitStatus } from "@/lib/domain";
 import type { PromptView } from "@/server/services/settings";
 import { buildBench } from "./build.mjs";
+import { appVersion, copyDevData } from "./devData";
 import { type BenchCase, matchFindings, summarize, type Tally } from "./score";
 
 // Reviews every bench case with the real engine and scores the findings
@@ -25,9 +24,6 @@ import { type BenchCase, matchFindings, summarize, type Tally } from "./score";
 // Works on a copy of ./data (providers, keys, rules), so the dev database is
 // untouched. Writes eval/results/<time>-<label>.json.
 
-const DEV_DATA = path.resolve("data");
-const DB_FILE = "app.db";
-const SECRET_FILE = "secret.key";
 const RESULTS = path.resolve("eval", "results");
 const POLL_MS = 1000;
 const TIMEOUT_MS = 4 * 60 * 60 * 1000;
@@ -37,26 +33,6 @@ const DEFAULT_CONCURRENCY = 5;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const pct = (t: Tally) => `${t.hit}/${t.total} (${t.total ? Math.round((100 * t.hit) / t.total) : 0}%)`;
-
-// Online backup: safe while the dev server holds the database open. The
-// copy caps every model's concurrency, which the engine shares across reviews.
-async function copyDevData(dest: string, concurrency: number) {
-  fs.mkdirSync(dest, { recursive: true });
-  const source = new Database(path.join(DEV_DATA, DB_FILE), { readonly: true });
-  await source.backup(path.join(dest, DB_FILE));
-  source.close();
-  fs.copyFileSync(path.join(DEV_DATA, SECRET_FILE), path.join(dest, SECRET_FILE));
-
-  const copy = new Database(path.join(dest, DB_FILE));
-  copy.prepare("UPDATE models SET max_concurrency = ?").run(concurrency);
-  copy.close();
-}
-
-function appVersion(): string {
-  const sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
-  const dirty = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim() !== "";
-  return dirty ? `${sha}+dirty` : sha;
-}
 
 describe.skipIf(!process.env.EVAL)("review eval", () => {
   it("scores the bench", async () => {

@@ -10,6 +10,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "eval": "vitest run eval/run --silent=false",
+    "eval:ask": "vitest run eval/ask/run --silent=false",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

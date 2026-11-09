@@ -247,7 +247,7 @@ type ChatRequest = {
 // carries ChatMetadata: tokens spent, context size, why it stopped.
 export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Response> {
   const budget = req.budget ?? { steps: MAX_CHAT_STEPS, contextTokens: Infinity };
-  const spent: Usage = { input: 0, output: 0 };
+  const spent: TurnSpend = { input: 0, output: 0, nudges: 0 };
   const parts = chatParts(cfg, req, budget, await convertToModelMessages(req.history ?? req.messages), spent);
 
   // The last step's tokens are what the next turn sends again.
@@ -269,29 +269,32 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
           return undefined;
         }
 
-        return { usage: toUsage(part.totalUsage), context, stop: chatStop(part.finishReason) };
+        return { usage: toUsage(part.totalUsage), context, stop: chatStop(part.finishReason), nudges: spent.nudges };
       },
       // Show the real cause, e.g. "Failed to process successful response".
       onError: (e) => (e instanceof Error ? e.message : String(e)),
-      onEnd: ({ messages }) => req.onEnd(messages, spent),
+      onEnd: ({ messages }) => req.onEnd(messages, { input: spent.input, output: spent.output }),
     }),
   });
 }
 
 type FinishPart = Extract<ChatPart, { type: "finish" }>;
 
+// Tokens of every run of a turn, and how many nudges it took.
+type TurnSpend = Usage & { nudges: number };
+
 // The turn's stream parts: one tool loop, then another after a nudge when
 // the loop stopped short (see stoppedShort), as one answer to the browser:
 //   run 1: start … finish-step   ─┐  its "finish" held back
 //   nudge (model side only)       │
 //   run 2: (no start) … finish   ─┘  "finish" carries both runs' tokens
-// `spent` accumulates the tokens of every run.
-async function* chatParts(cfg: ModelConfig, req: ChatRequest, budget: Budget, start: ModelMessage[], spent: Usage): AsyncGenerator<ChatPart> {
+// `spent` accumulates the tokens of every run, and the nudges.
+async function* chatParts(cfg: ModelConfig, req: ChatRequest, budget: Budget, start: ModelMessage[], spent: TurnSpend): AsyncGenerator<ChatPart> {
   const tools = toolSet(req.tools);
   let messages = start;
   let stepsDone = 0;
 
-  for (let nudges = 0; ; nudges++) {
+  for (;;) {
     const offset = stepsDone;
     const result = streamText({
       model: languageModel(cfg),
@@ -306,7 +309,7 @@ async function* chatParts(cfg: ModelConfig, req: ChatRequest, budget: Budget, st
 
     let finish: FinishPart | undefined;
     for await (const part of result.stream) {
-      if (part.type === "start" && nudges > 0) {
+      if (part.type === "start" && spent.nudges > 0) {
         continue;
       }
 
@@ -330,12 +333,13 @@ async function* chatParts(cfg: ModelConfig, req: ChatRequest, budget: Budget, st
     stepsDone += steps.length;
 
     const last = steps.at(-1);
-    const retry = nudges < MAX_NUDGES && stepsDone < budget.steps - 1 && Object.keys(tools).length > 0;
+    const retry = spent.nudges < MAX_NUDGES && stepsDone < budget.steps - 1 && Object.keys(tools).length > 0;
     if (!retry || !last || !stoppedShort(finish.finishReason, last)) {
       yield { ...finish, totalUsage: { ...finish.totalUsage, inputTokens: spent.input, outputTokens: spent.output } };
       return;
     }
 
+    spent.nudges++;
     messages = [...messages, ...(await result.response).messages, { role: "user", content: NUDGE }];
   }
 }
