@@ -16,6 +16,7 @@ import {
   type FinishReason,
   type LanguageModel,
   type LanguageModelUsage,
+  type ModelMessage,
   type TextStreamPart,
   type ToolSet,
   type UIMessage,
@@ -66,6 +67,18 @@ const OBJECT_RETRIES = 2;
 const MAX_CHAT_STEPS = 30;
 // Added to the instructions of the last allowed step, which can't call tools.
 const BUDGET_SPENT = "\n\nYour tool budget is used up: answer now from what you found, and name what you would check next.";
+
+// Models often end a step with no tool call and no answer, e.g. "Now let me
+// read the caller:" or nothing at all. The SDK takes that as the answer and
+// the chat stops mid-investigation; instead the turn goes on with a note,
+// at most MAX_NUDGES times.
+const MAX_NUDGES = 2;
+const NUDGE = `(Automatic note, not from the developer.) Your last message ended your turn without an answer: it was empty or announced a next step, but called no tool. If you need more code, call the tools now, batching everything you need. Otherwise write the final answer now from what you found.`;
+// A last paragraph announcing work instead of reporting it, in a short text.
+//   "Let me check how it's called." · "I'll look at the parser next." · "Next, the caller:"
+const ANNOUNCES = /^(let me(?! know)|let's|i'll|i will|i'm going to|i am going to|i need to|now,? (let me|i'll)|next,? (let me|i'll)|first,? (let me|i'll))\b/i;
+const TRAILS_OFF = /(:|…|\.\.\.)$/;
+const MAX_ANNOUNCE_CHARS = 600;
 
 function languageModel(cfg: ModelConfig): LanguageModel {
   const apiKey = cfg.apiKey ?? undefined;
@@ -233,25 +246,16 @@ type ChatRequest = {
 // server-side. Calls `onEnd` with the full thread to persist it. The answer
 // carries ChatMetadata: tokens spent, context size, why it stopped.
 export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Response> {
-  const tools = toolSet(req.tools);
   const budget = req.budget ?? { steps: MAX_CHAT_STEPS, contextTokens: Infinity };
-  const result = streamText({
-    model: languageModel(cfg),
-    instructions: req.instructions,
-    messages: await convertToModelMessages(req.history ?? req.messages),
-    tools,
-    stopWhen: stepCountIs(budget.steps),
-    prepareStep: ({ stepNumber, steps }) => finalStep(stepNumber, steps, budget, req.instructions),
-    maxOutputTokens: cfg.maxOutputTokens ?? undefined,
-    abortSignal: req.signal,
-  });
+  const spent: Usage = { input: 0, output: 0 };
+  const parts = chatParts(cfg, req, budget, await convertToModelMessages(req.history ?? req.messages), spent);
 
   // The last step's tokens are what the next turn sends again.
   let context = 0;
 
   return createUIMessageStreamResponse({
     stream: toUIMessageStream({
-      stream: endOnError(result.stream),
+      stream: endOnError(parts),
       originalMessages: req.messages,
       // Without it answers get id "", which clash when the thread is saved.
       generateMessageId: generateId,
@@ -269,14 +273,87 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
       },
       // Show the real cause, e.g. "Failed to process successful response".
       onError: (e) => (e instanceof Error ? e.message : String(e)),
-      onEnd: async ({ messages }) => {
-        // Rejects when the model failed; rethrowing here would abort the
-        // response mid-stream ("Error in input stream" in the browser).
-        const usage = await Promise.resolve(result.totalUsage).catch(() => undefined);
-        req.onEnd(messages, toUsage(usage));
-      },
+      onEnd: ({ messages }) => req.onEnd(messages, spent),
     }),
   });
+}
+
+type FinishPart = Extract<ChatPart, { type: "finish" }>;
+
+// The turn's stream parts: one tool loop, then another after a nudge when
+// the loop stopped short (see stoppedShort), as one answer to the browser:
+//   run 1: start … finish-step   ─┐  its "finish" held back
+//   nudge (model side only)       │
+//   run 2: (no start) … finish   ─┘  "finish" carries both runs' tokens
+// `spent` accumulates the tokens of every run.
+async function* chatParts(cfg: ModelConfig, req: ChatRequest, budget: Budget, start: ModelMessage[], spent: Usage): AsyncGenerator<ChatPart> {
+  const tools = toolSet(req.tools);
+  let messages = start;
+  let stepsDone = 0;
+
+  for (let nudges = 0; ; nudges++) {
+    const offset = stepsDone;
+    const result = streamText({
+      model: languageModel(cfg),
+      instructions: req.instructions,
+      messages,
+      tools,
+      stopWhen: stepCountIs(budget.steps - offset),
+      prepareStep: ({ stepNumber, steps }) => finalStep(stepNumber + offset, steps, budget, req.instructions),
+      maxOutputTokens: cfg.maxOutputTokens ?? undefined,
+      abortSignal: req.signal,
+    });
+
+    let finish: FinishPart | undefined;
+    for await (const part of result.stream) {
+      if (part.type === "start" && nudges > 0) {
+        continue;
+      }
+
+      if (part.type === "finish") {
+        finish = part;
+        continue;
+      }
+
+      yield part;
+    }
+
+    // Aborted: the stream ended without a finish.
+    if (!finish) {
+      return;
+    }
+
+    const steps = await result.steps;
+    const usage = toUsage(finish.totalUsage);
+    spent.input += usage.input;
+    spent.output += usage.output;
+    stepsDone += steps.length;
+
+    const last = steps.at(-1);
+    const retry = nudges < MAX_NUDGES && stepsDone < budget.steps - 1 && Object.keys(tools).length > 0;
+    if (!retry || !last || !stoppedShort(finish.finishReason, last)) {
+      yield { ...finish, totalUsage: { ...finish.totalUsage, inputTokens: spent.input, outputTokens: spent.output } };
+      return;
+    }
+
+    messages = [...messages, ...(await result.response).messages, { role: "user", content: NUDGE }];
+  }
+}
+
+// True when a step ended the turn without a tool call or an answer: empty
+// text, or a short text whose last paragraph announces a next step.
+function stoppedShort(reason: FinishReason, step: { text: string; toolCalls: unknown[] }): boolean {
+  if (reason !== "stop" || step.toolCalls.length > 0) {
+    return false;
+  }
+
+  const text = step.text.trim();
+  if (!text) {
+    return true;
+  }
+
+  const lastParagraph = text.split(/\n\s*\n/).at(-1)?.trim() ?? "";
+  return text.length <= MAX_ANNOUNCE_CHARS && (ANNOUNCES.test(lastParagraph) || TRAILS_OFF.test(lastParagraph));
 }
 
 export type Budget = { steps: number; contextTokens: number };
@@ -316,12 +393,11 @@ function chatStop(reason: FinishReason): ChatStop {
 // The SDK rethrows a dropped model connection instead of emitting an error
 // part; turn it into one so the browser gets a readable error, not a broken
 // response ("Error in input stream").
-function endOnError(stream: ReadableStream<ChatPart>): ReadableStream<ChatPart> {
-  const reader = stream.getReader();
+function endOnError(parts: AsyncGenerator<ChatPart>): ReadableStream<ChatPart> {
   return new ReadableStream<ChatPart>({
     async pull(controller) {
       try {
-        const { done, value } = await reader.read();
+        const { done, value } = await parts.next();
         if (done) {
           controller.close();
           return;
@@ -333,7 +409,9 @@ function endOnError(stream: ReadableStream<ChatPart>): ReadableStream<ChatPart> 
         controller.close();
       }
     },
-    cancel: (reason) => reader.cancel(reason),
+    cancel: async () => {
+      await parts.return(undefined);
+    },
   });
 }
 

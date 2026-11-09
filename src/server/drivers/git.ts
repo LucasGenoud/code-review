@@ -247,6 +247,26 @@ export async function grepAt(dir: string, pattern: string, sha: string | null, o
   return withoutSha(await git(dir, args, ExitPolicy.AllowNoMatch), sha);
 }
 
+// Per file, the number of lines containing `text`, ignoring case, at commit
+// `sha` or in the working tree when null. Binary files are skipped.
+//   "refund" → Map { "src/pay.ts" → 4, "README.md" → 1 }
+export async function matchCounts(dir: string, text: string, sha: string | null): Promise<Map<string, number>> {
+  const where = sha ? [sha] : ["--untracked"];
+  const out = withoutSha(await git(dir, ["grep", "-c", "-I", "-i", "-F", "-e", text, ...where], ExitPolicy.AllowNoMatch), sha);
+  const counts = new Map<string, number>();
+
+  for (const line of out.split("\n")) {
+    const sep = line.lastIndexOf(":");
+    if (sep <= 0) {
+      continue;
+    }
+
+    counts.set(line.slice(0, sep), Number(line.slice(sep + 1)));
+  }
+
+  return counts;
+}
+
 // Searching a commit prefixes each line with "<sha>:".
 function withoutSha(out: string, sha: string | null): string {
   if (!sha) {

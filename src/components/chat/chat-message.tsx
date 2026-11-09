@@ -127,13 +127,15 @@ function ToolChip({ part }: { part: ToolPart }) {
   );
 }
 
-// First string argument, e.g. { path: "app.py" } → "app.py".
+// First string or list argument, e.g. { path: "app.py" } → "app.py",
+// { names: ["pay", "refund"] } → "pay, refund".
 function inputSummary(input: unknown): string {
   if (!input || typeof input !== "object") {
     return "";
   }
 
-  return Object.values(input).find((v): v is string => typeof v === "string") ?? "";
+  const value = Object.values(input).find((v) => typeof v === "string" || Array.isArray(v));
+  return Array.isArray(value) ? value.join(", ") : (value ?? "");
 }
 
 enum RunOutcome {

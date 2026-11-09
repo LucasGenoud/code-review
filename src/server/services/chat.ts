@@ -24,6 +24,7 @@ import { chatInstructions, MODE_STEPS } from "./chatPrompts";
 import { InputError } from "./errors";
 import { resolveModel, type ResolvedModel } from "./providers";
 import { readRepoFile, repoMap, repoTools, ToolScope, type RepoView } from "./repoTools";
+import { relevantCode } from "./retrieval";
 import { runCode, usableLanguages } from "./sandbox";
 import { rangeLabel } from "./reviews";
 import type { RulesSnapshot } from "./rules";
@@ -42,6 +43,12 @@ const MAX_TITLE_LENGTH = 80;
 // at most MAX_MAP_CHARS.
 const MAP_SHARE = 0.05;
 const MAX_MAP_CHARS = 12_000;
+// Code retrieved for the question (see retrieval): this share, at most
+// MAX_SEED_CHARS.
+const SEED_SHARE = 0.04;
+const MAX_SEED_CHARS = 10_000;
+const SEED_HEADING = `## Likely relevant code
+Found by matching the question's words against the repository; lexical, so it can miss synonyms or include noise. Not shown to the developer.`;
 // The answer is forced once the conversation fills this share of the window.
 const CONTEXT_SHARE = 0.85;
 
@@ -143,7 +150,7 @@ export async function chatResponse(reviewId: number, messages: UIMessage[], mode
   }
 
   const model = resolveModel(review.modelId);
-  const setup = await turnSetup({ project, review }, model, parseMode(mode), reviewContext(review));
+  const setup = await turnSetup({ project, review }, model, parseMode(mode), reviewContext(review), messages);
 
   // The question is kept even if the answer never completes.
   saveMessages({ reviewId }, messages);
@@ -151,7 +158,6 @@ export async function chatResponse(reviewId: number, messages: UIMessage[], mode
   const response = await streamChat(model.config, {
     ...setup,
     messages,
-    history: trimToolOutputs(messages),
     signal: beginLive(key),
     onEnd: (all, usage) => {
       saveMessages({ reviewId }, all);
@@ -211,14 +217,13 @@ export async function projectChatResponse(projectId: number, threadId: number, m
   }
 
   const model = resolveModel(project.modelId);
-  const setup = await turnSetup({ project, review: null }, model, parseMode(mode), "");
+  const setup = await turnSetup({ project, review: null }, model, parseMode(mode), "", messages);
 
   saveMessages({ threadId }, messages);
   const key = threadKey(threadId);
   const response = await streamChat(model.config, {
     ...setup,
     messages,
-    history: trimToolOutputs(messages),
     signal: beginLive(key),
     onEnd: (all) => {
       saveMessages({ threadId }, all);
@@ -285,25 +290,54 @@ function parseMode(mode: unknown): ChatMode {
   return z.enum(ChatMode).catch(ChatMode.Ask).parse(mode);
 }
 
-// Instructions, tools and budget of one chat turn.
-async function turnSetup(view: RepoView, model: ResolvedModel, mode: ChatMode, context: string) {
+// Instructions, tools, budget and model-side history of one chat turn.
+async function turnSetup(view: RepoView, model: ResolvedModel, mode: ChatMode, context: string, messages: UIMessage[]) {
   const toolCalling = model.model.toolCalling;
-  const languages = toolCalling ? await usableLanguages() : [];
-  const mapChars = Math.min(MAX_MAP_CHARS, Math.floor(model.model.contextWindow * MAP_SHARE * CHARS_PER_TOKEN));
+  const contextWindow = model.model.contextWindow;
+  const mapChars = Math.min(MAX_MAP_CHARS, Math.floor(contextWindow * MAP_SHARE * CHARS_PER_TOKEN));
+  const seedChars = Math.min(MAX_SEED_CHARS, Math.floor(contextWindow * SEED_SHARE * CHARS_PER_TOKEN));
+  const [languages, map, seed] = await Promise.all([
+    toolCalling ? usableLanguages() : [],
+    toolCalling ? repoMap(view, mapChars) : "",
+    relevantCode(view, latestQuestion(messages), seedChars).catch(() => ""),
+  ]);
+
   const instructions = chatInstructions({
     mode,
     project: view.project,
     context,
-    repoMap: toolCalling ? await repoMap(view, mapChars) : "",
+    repoMap: map,
     languages,
     tools: toolCalling,
   });
 
   return {
     instructions,
+    history: withSeed(trimToolOutputs(messages), seed),
     tools: toolCalling ? { ...repoTools(view, ToolScope.Chat), ...sandboxTools(view.project, languages) } : {},
     budget: { steps: MODE_STEPS[mode], contextTokens: Math.floor(model.model.contextWindow * CONTEXT_SHARE) },
   };
+}
+
+// Text of the last user message; "" for a compaction summary.
+function latestQuestion(messages: UIMessage[]): string {
+  const last = messages.findLast((m) => m.role === "user");
+  const text = (last?.parts ?? []).flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
+  return text.startsWith(SUMMARY_PREFIX) ? "" : text;
+}
+
+// The retrieved code rides on the latest question, not the system prompt:
+// the prompt stays identical across turns (provider prompt caching), and
+// older questions drop their seed. Stored messages never carry it.
+function withSeed(history: UIMessage[], seed: string): UIMessage[] {
+  const at = history.findLastIndex((m) => m.role === "user");
+  if (!seed || at < 0) {
+    return history;
+  }
+
+  const question = history[at];
+  const seeded = { ...question, parts: [...question.parts, { type: "text" as const, text: `${SEED_HEADING}\n${seed}` }] };
+  return history.with(at, seeded);
 }
 
 // What the review chat knows beyond the code: range, overview, findings.

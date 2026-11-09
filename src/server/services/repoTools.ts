@@ -9,6 +9,7 @@ import type { Project, Review } from "@/server/drivers/schema";
 import { headContent } from "./diff";
 import { parseDiff } from "./diffParse";
 import { isInside } from "./paths";
+import { locateCode } from "./retrieval";
 import { declarationEnd, definitionPattern, outline } from "./symbols";
 
 // Read-only repository tools for the chat and the review agents, and the
@@ -17,7 +18,8 @@ import { declarationEnd, definitionPattern, outline } from "./symbols";
 // model converges in few calls instead of paging blindly.
 //
 //   repoMap ──► system prompt (where things are, no list_files needed)
-//   read_symbol ─► a whole function by name, in one call
+//   locate ─► files ranked for a set of terms, with declarations, in one call
+//   read_symbol ─► whole functions by name, several in one call
 //   search / find_usages ─► grouped per file, capped, with "narrow with glob"
 //   read_file ─► line ranges; a cut read names the next range
 
@@ -25,9 +27,14 @@ const MAX_FILE_LINES = 400;
 const MAX_TOOL_LINES = 200;
 // Files listed by list_files before it switches to directory counts.
 const MAX_LISTED_FILES = 300;
-// Definitions returned by read_symbol, and lines per definition.
+// Names per read_symbol call, definitions per name and in all, lines per definition.
+const MAX_SYMBOL_NAMES = 5;
 const MAX_SYMBOLS = 3;
+const MAX_SYMBOL_BLOCKS = 6;
 const MAX_SYMBOL_LINES = 150;
+// locate output, in characters.
+const LOCATE_CHARS = 8_000;
+const MAX_LOCATE_TERMS = 8;
 const MAX_SEARCH_CONTEXT = 5;
 // Files named in the tally of a cut search.
 const TALLY_FILES = 6;
@@ -79,23 +86,26 @@ export function repoTools(view: RepoView, scope: ToolScope): Record<string, Chat
           : body;
       },
     }),
+    locate: defineTool({
+      description:
+        "Find where a concept lives, in one call: ranks files by the terms they contain (content and path, rare terms weigh more) and returns the top files' declarations and matching lines with line numbers. Give the identifiers and words the code would use, synonyms included, e.g. [\"refund\", \"chargeback\", \"PaymentService\"]. Use it instead of chaining search, list_files and outline.",
+      input: z.object({
+        terms: z.array(z.string()).min(1).max(MAX_LOCATE_TERMS).describe("Case-insensitive substrings, at least 3 characters each"),
+        glob: z.string().nullable().describe("Only files matching, e.g. src/server/**"),
+      }),
+      run: ({ terms, glob }) => locateCode(view, terms, glob, LOCATE_CHARS),
+    }),
     read_symbol: defineTool({
       description:
-        "Read the full declaration of a function, method, class or type by name: its location and code, in one call. The fastest way to see how something works. Optionally limit to one file.",
+        "Read the full declarations of functions, methods, classes or types by name: location and code, several names in one call. The fastest way to see how something works. Optionally limit to one file.",
       input: z.object({
-        name: z.string().regex(IDENTIFIER).describe("e.g. savePayment"),
-        path: z.string().nullable().describe("Only this file, when the name is common"),
+        names: z.array(z.string().regex(IDENTIFIER)).min(1).max(MAX_SYMBOL_NAMES).describe("e.g. [\"savePayment\", \"Refund\"]"),
+        path: z.string().nullable().describe("Only this file, when a name is common"),
       }),
-      run: async ({ name, path: only }) => {
-        const out = await grepAt(project.path, definitionPattern(name), sha, { glob: only ?? undefined });
-        const hits = out.split("\n").filter(Boolean);
-        if (hits.length === 0) {
-          return `No declaration of ${name} found. Try find_usages to see where it appears.`;
-        }
-
-        const blocks = await Promise.all(hits.slice(0, MAX_SYMBOLS).map((hit) => symbolBlock(view, hit)));
-        const more = hits.length > MAX_SYMBOLS ? `\n\n… ${hits.length - MAX_SYMBOLS} more declarations: ${hits.slice(MAX_SYMBOLS).map(location).join(", ")}` : "";
-        return blocks.join("\n\n") + more;
+      run: async ({ names, path: only }) => {
+        const perName = Math.min(MAX_SYMBOLS, Math.max(1, Math.floor(MAX_SYMBOL_BLOCKS / names.length)));
+        const found = await Promise.all(names.map((name) => symbolBlocks(view, name, only, perName)));
+        return found.join("\n\n");
       },
     }),
     search: defineTool({
@@ -170,6 +180,19 @@ export function repoTools(view: RepoView, scope: ToolScope): Record<string, Chat
   }
 
   return tools;
+}
+
+// Up to `limit` declarations of `name`, then the locations of the rest.
+async function symbolBlocks(view: RepoView, name: string, only: string | null, limit: number): Promise<string> {
+  const out = await grepAt(view.project.path, definitionPattern(name), view.review?.headSha ?? null, { glob: only ?? undefined });
+  const hits = out.split("\n").filter(Boolean);
+  if (hits.length === 0) {
+    return `No declaration of ${name} found. Try find_usages or locate to see where it appears.`;
+  }
+
+  const blocks = await Promise.all(hits.slice(0, limit).map((hit) => symbolBlock(view, hit)));
+  const more = hits.length > limit ? `\n\n… ${hits.length - limit} more declarations of ${name}: ${hits.slice(limit).map(location).join(", ")}` : "";
+  return blocks.join("\n\n") + more;
 }
 
 // "src/pay.ts:40-62\n40   export function pay(…) {…" for one definition hit.

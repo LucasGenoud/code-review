@@ -908,13 +908,19 @@ function toolActivity(name: string, input: unknown): string {
   const range = i.startLine ? `:${i.startLine}-${i.endLine ?? ""}` : "";
   const labels: Record<string, string> = {
     read_file: `Reading ${i.path}${range}`,
-    read_symbol: `Reading ${i.name}${i.path ? ` in ${i.path}` : ""}`,
+    read_symbol: `Reading ${listed(i.names)}${i.path ? ` in ${i.path}` : ""}`,
+    locate: `Locating ${listed(i.terms)}${where}`,
     search: `Searching ${i.pattern}${where}`,
     find_usages: `Finding usages of ${i.identifier}${where}`,
     outline: `Outlining ${i.path}`,
     list_files: `Listing ${i.glob}`,
   };
   return labels[name] ?? `Running ${name}`;
+}
+
+// ["pay", "refund"] → "pay, refund".
+function listed(value: unknown): string {
+  return Array.isArray(value) ? value.join(", ") : String(value ?? "");
 }
 
 // One call with the unit's diffs. The bugs pass first greps usages of
