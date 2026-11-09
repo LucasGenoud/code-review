@@ -34,3 +34,12 @@ export async function resolveInRoot(dir?: string): Promise<string> {
 export async function isRoot(dir: string): Promise<boolean> {
   return dir === (await realDir(config.repoRoot));
 }
+
+// Tests, fixtures and test data, by the usual layouts:
+//   src/test/java/…, __tests__/, fixtures/, testdata/
+//   pay.test.ts, pay_spec.rb, pay_test.go, PayServiceTest.java, PayIT.java
+const TEST_PATH = /(^|\/)(tests?|__tests__|spec|fixtures?|test-?data)\/|[._-](test|spec)\.[^/]+$|_test\.[^/]+$|[A-Za-z](Tests?|IT)\.[^/]+$/;
+
+export function isTestPath(file: string): boolean {
+  return TEST_PATH.test(file);
+}

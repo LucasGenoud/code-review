@@ -1,6 +1,8 @@
 import picomatch from "picomatch";
 import { matchCounts, trackedFiles } from "@/server/drivers/git";
+import { isTestPath } from "./paths";
 import { readRepoFile, type RepoView } from "./repoTools";
+import { rankedFiles } from "./symbolIndex";
 import { outline } from "./symbols";
 
 // Finds the code a question is about before the model spends tool calls
@@ -32,6 +34,9 @@ const DIRECTORY_WEIGHT = 1;
 const DECLARATION_WEIGHT = 1.5;
 // Tests and fixtures explain less than the code they exercise.
 const TEST_FACTOR = 0.6;
+// Tie-breaker for files the codebase depends on (see symbolIndex): at most
+// this much, for the most depended-on file.
+const IMPORTANCE_WEIGHT = 2;
 // A path the question names outranks every term match, unless the name is
 // too common to point at one file, e.g. "settings.json" in a monorepo.
 const MENTION_SCORE = 1_000;
@@ -49,7 +54,6 @@ const LOW_VALUE = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.l
 // e.g. apiKey, user_id, $store, v2: written like code, kept unstemmed.
 const CODE_LIKE = /[a-z][A-Z]|_|\$|\d/;
 const WORD = /[A-Za-z_$][A-Za-z0-9_$]*/g;
-const TEST_PATH = /(^|\/)(tests?|__tests__|spec|fixtures?)\/|[._-](test|spec)\.[^/]+$|_test\.[^/]+$/;
 // e.g. src/pay.ts, Dockerfile.dev
 const PATH_LIKE = /[\w./-]+\.[A-Za-z0-9]+/g;
 
@@ -196,7 +200,7 @@ async function rankFiles(view: RepoView, read: Reader, terms: string[], files: s
       return sum + idf[i] * (content + pathWeight(lower, n));
     }, 0);
     const mention = mentioned.includes(file) ? MENTION_SCORE : 0;
-    return (TEST_PATH.test(file) ? score * TEST_FACTOR : score) + mention;
+    return (isTestPath(file) ? score * TEST_FACTOR : score) + mention;
   };
 
   const candidates = new Set([...mentioned, ...counts.flatMap((c) => [...c.keys()]), ...[...allowed].filter((f) => needles.some((n) => f.toLowerCase().includes(n)))]);
@@ -204,17 +208,25 @@ async function rankFiles(view: RepoView, read: Reader, terms: string[], files: s
   first.sort((a, b) => b.score - a.score);
 
   // A file declaring the concept beats one that only mentions it.
+  const importance = await importanceOf(view);
   const rescored = await Promise.all(
     first.slice(0, RERANK_FILES).map(async (c) => {
       const content = await read(c.file);
       const lengthNorm = 1 - BM25_B + (BM25_B * content.split("\n").length) / AVERAGE_FILE_LINES;
       const declarations = outline(content).join("\n").toLowerCase();
       const bonus = needles.reduce((sum, n, i) => (declarations.includes(n) ? sum + idf[i] * DECLARATION_WEIGHT : sum), 0);
-      return { file: c.file, score: scoreOf(c.file, lengthNorm) + bonus };
+      return { file: c.file, score: scoreOf(c.file, lengthNorm) + bonus + IMPORTANCE_WEIGHT * (importance.get(c.file) ?? 0) };
     }),
   );
 
   return [...rescored.sort((a, b) => b.score - a.score), ...first.slice(RERANK_FILES)];
+}
+
+// File → 1 for the most depended-on file, down to 0; empty while the
+// symbol index builds.
+async function importanceOf(view: RepoView): Promise<Map<string, number>> {
+  const ranked = (await rankedFiles(view.project.path).catch(() => null)) ?? [];
+  return new Map(ranked.map((r, i) => [r.file, 1 - i / ranked.length]));
 }
 
 // "src/terminal/linkDetector.ts", "link" → NAME_WEIGHT; "terminal" → DIRECTORY_WEIGHT.

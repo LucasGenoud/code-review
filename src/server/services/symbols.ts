@@ -51,6 +51,34 @@ function isDeclaration(line: string): boolean {
   return DECLARATION.test(line) || ARROW.test(line) || MEMBER.test(line);
 }
 
+// Name declared on a line the outline keeps, e.g. "export async function load(" → load,
+// "func (r *Repo) Save(" → Save, "const total = (" → total, "  save(order) {" → save.
+const DECLARED_NAME = [
+  new RegExp(`\\b(${KEYWORDS.replace("|const|let|var|val", "")})\\s+(\\([^)]*\\)\\s*)?([A-Za-z_$][${IDENT}]*)`),
+  new RegExp(`\\b(const|let|var)\\s+([A-Za-z_$][${IDENT}]*)`),
+  new RegExp(`([A-Za-z_$][${IDENT}]*)\\s*(<[^>]*>)?\\(`),
+];
+
+export type Declaration = { name: string; line: number };
+
+// Declarations of `source` by name, e.g. [{ name: "load", line: 12 }].
+export function declarations(source: string): Declaration[] {
+  return source.split(/\r?\n/).flatMap((text, i) => {
+    if (!isDeclaration(text)) {
+      return [];
+    }
+
+    for (const pattern of DECLARED_NAME) {
+      const m = pattern.exec(text);
+      if (m) {
+        return [{ name: m[m.length - 1] ?? m[1], line: i + 1 }];
+      }
+    }
+
+    return [];
+  });
+}
+
 // Last line (1-based) of the declaration on `line`, so a tool can return a
 // whole function without reading the file. Ends at the closing bracket at
 // the declaration's indentation, before the next sibling declaration or

@@ -10,6 +10,7 @@ import { headContent } from "./diff";
 import { parseDiff } from "./diffParse";
 import { isInside } from "./paths";
 import { locateCode } from "./retrieval";
+import { keyFiles } from "./symbolIndex";
 import { declarationEnd, definitionPattern, outline } from "./symbols";
 
 // Read-only repository tools for the chat and the review agents, and the
@@ -47,6 +48,9 @@ const MAX_SHOW_LINES = 400;
 // when the repository is this small.
 const MAX_MAP_DEPTH = 6;
 const FULL_MAP_FILES = 150;
+// Share of a large repository's map spent on key files.
+const KEY_FILES_SHARE = 0.5;
+const KEY_FILES_HEADING = "Key files (most depended on first, with their most used declarations):";
 // e.g. 1e2c9e5, HEAD~2, v1.4: no leading dash, so never an option.
 const COMMIT_REF = /^[\w.\/^~@{}][\w.\/^~@{}-]*$/;
 // e.g. savePayment, $store, user_id.
@@ -273,10 +277,14 @@ function pastedContent(review: Review, file: string): string | null {
 // --- repository map --------------------------------------------------------
 
 // The repository's layout within `budget` characters, for system prompts:
-// every file when small, else directories with file counts, as deep as fit.
+// every file when small, else the key files (see symbolIndex) and
+// directories with file counts, as deep as fit.
+//   Key files (…):
+//   src/money.ts: Money, Currency
+//
+//   Layout: 412 files
 //   src/ (412)
 //     server/ (120)
-//       drivers/ (31)
 //   package.json
 export async function repoMap(view: RepoView, budget: number): Promise<string> {
   const files = await trackedFiles(view.project.path).catch(() => []);
@@ -291,14 +299,18 @@ export async function repoMap(view: RepoView, budget: number): Promise<string> {
     }
   }
 
+  const key = await keyFiles(view.project.path, Math.floor(budget * KEY_FILES_SHARE)).catch(() => "");
+  const head = key ? `${KEY_FILES_HEADING}\n${key}\n\nLayout: ` : "";
+  const room = budget - head.length;
+
   for (let depth = MAX_MAP_DEPTH; depth >= 1; depth--) {
     const map = `${files.length} files\n${directoryCounts(files, depth).join("\n")}`;
-    if (map.length <= budget) {
-      return map;
+    if (map.length <= room) {
+      return head + map;
     }
   }
 
-  return `${files.length} files\n${directoryCounts(files, 1).join("\n")}`.slice(0, budget);
+  return head + `${files.length} files\n${directoryCounts(files, 1).join("\n")}`.slice(0, room);
 }
 
 // Indented directories down to `depth`, with file counts, then root files.

@@ -203,6 +203,25 @@ export async function trackedFiles(dir: string): Promise<string[]> {
   return out.split("\0").filter(Boolean);
 }
 
+// Blob id of every tracked file as staged: changes with its committed or
+// staged content, so caches can skip files whose id is unchanged.
+//   "100644 e69de29… 0\tsrc/a.ts" → Map { "src/a.ts" → "e69de29…" }
+export async function fileBlobs(dir: string): Promise<Map<string, string>> {
+  const out = await git(dir, ["ls-files", "-s", "-z"]);
+  const blobs = new Map<string, string>();
+
+  for (const entry of out.split("\0")) {
+    const tab = entry.indexOf("\t");
+    if (tab < 0) {
+      continue;
+    }
+
+    blobs.set(entry.slice(tab + 1), entry.split(" ")[1]);
+  }
+
+  return blobs;
+}
+
 // File content at a commit, or null if absent there.
 export async function showFile(dir: string, sha: string, file: string): Promise<string | null> {
   try {
