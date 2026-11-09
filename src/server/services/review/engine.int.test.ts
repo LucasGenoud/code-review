@@ -85,7 +85,7 @@ describe("review pipeline", () => {
       kind: ProviderKind.Compatible,
       baseUrl: `http://localhost:${PORT}/v1`,
     });
-    expect(await providers.fetchModelNames(providerId)).toEqual(["mock-reviewer"]);
+    expect(await providers.fetchModelNames(providerId)).toEqual(["mock-embed", "mock-reviewer"]);
     const modelId = providers.saveModel({
       providerId,
       name: "mock-reviewer",

@@ -2,7 +2,7 @@ import picomatch from "picomatch";
 import { matchCounts, trackedFiles } from "@/server/drivers/git";
 import { isTestPath } from "./paths";
 import { readRepoFile, type RepoView } from "./repoTools";
-import { semanticSearch, type SemanticHit } from "./semanticIndex";
+import type { SemanticHit } from "./semanticIndex";
 import { rankedFiles } from "./symbolIndex";
 import { outline } from "./symbols";
 
@@ -35,9 +35,8 @@ const DIRECTORY_WEIGHT = 1;
 const DECLARATION_WEIGHT = 1.5;
 // Tests and fixtures explain less than the code they exercise.
 const TEST_FACTOR = 0.6;
-// Semantic search: chunks asked for, the fusion constant (standard RRF k),
-// and lines of a matched chunk shown.
-const SEMANTIC_HITS = 12;
+// Semantic search: the fusion constant (standard RRF k), and lines of a
+// matched chunk shown.
 const RRF_K = 60;
 const MEANING_LINES = 4;
 // Tie-breaker for files the codebase depends on (see symbolIndex): at most
@@ -131,11 +130,12 @@ function uniqueTerms(terms: string[]): string[] {
 
 // Code related to the question, within `budget` characters; "" when nothing
 // matches. Paths the question names come first.
-export async function relevantCode(view: RepoView, question: string, budget: number): Promise<string> {
+// semantic: chunks semantic search matched to the question, best first;
+// [] without a semantic index.
+export async function relevantCode(view: RepoView, question: string, budget: number, semantic: SemanticHit[] = []): Promise<string> {
   const files = await trackedFiles(view.project.path).catch(() => []);
   const mentioned = mentionedFiles(question, files);
   const terms = questionTerms(question);
-  const semantic = (await semanticSearch(view.project.id, question, SEMANTIC_HITS).catch(() => null)) ?? [];
   if (terms.length === 0 && mentioned.length === 0 && semantic.length === 0) {
     return "";
   }

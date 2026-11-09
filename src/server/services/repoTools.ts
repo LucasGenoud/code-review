@@ -181,27 +181,6 @@ export function repoTools(view: RepoView, scope: ToolScope): Record<string, Chat
     }),
   };
 
-  // Only once the project has a semantic index (project page → Semantic search).
-  if (hasSemanticIndex(project.id)) {
-    tools.semantic_search = defineTool({
-      description:
-        "Find code by meaning when you don't know its names: returns the code chunks closest to a description, with line ranges and their first lines. Describe the behavior, e.g. \"retry a payment after the card is declined\". Complements locate, which matches words.",
-      input: z.object({
-        query: z.string().min(3),
-        glob: z.string().nullable().describe("Only files matching, e.g. src/server/**"),
-      }),
-      run: async ({ query, glob }) => {
-        const hits = await semanticSearch(project.id, query, SEMANTIC_RESULTS, glob);
-        if (!hits || hits.length === 0) {
-          return "(no matches)";
-        }
-
-        const blocks = await Promise.all(hits.map(async (h) => `${h.path}:${h.startLine}-${h.endLine} (similarity ${h.score.toFixed(2)})\n${await firstLines(view, h.path, h.startLine, h.endLine)}`));
-        return blocks.join("\n\n");
-      },
-    });
-  }
-
   if (scope === ToolScope.Chat) {
     tools.git_log = defineTool({
       description: "Recent commits, optionally for one file or since a date: who changed it, when, why.",
@@ -251,6 +230,36 @@ async function symbolBlocks(view: RepoView, name: string, only: string | null, l
   const blocks = await Promise.all(hits.slice(0, limit).map((hit) => symbolBlock(view, hit)));
   const more = hits.length > limit ? `\n\n… ${hits.length - limit} more declarations of ${name}: ${hits.slice(limit).map(location).join(", ")}` : "";
   return blocks.join("\n\n") + more;
+}
+
+// semantic_search, once the project has a semantic index (project page →
+// Semantic search); none otherwise. Separate from repoTools: it reads the
+// app database, the repository tools only read the repository.
+export function semanticTools(view: RepoView): Record<string, ChatTool> {
+  const { project } = view;
+  if (!hasSemanticIndex(project.id)) {
+    return {};
+  }
+
+  return {
+    semantic_search: defineTool({
+      description:
+        "Find code by meaning when you don't know its names: returns the code chunks closest to a description, with line ranges and their first lines. Describe the behavior, e.g. \"retry a payment after the card is declined\". Complements locate, which matches words.",
+      input: z.object({
+        query: z.string().min(3),
+        glob: z.string().nullable().describe("Only files matching, e.g. src/server/**"),
+      }),
+      run: async ({ query, glob }) => {
+        const hits = await semanticSearch(project.id, query, SEMANTIC_RESULTS, glob);
+        if (!hits || hits.length === 0) {
+          return "(no matches)";
+        }
+
+        const blocks = await Promise.all(hits.map(async (h) => `${h.path}:${h.startLine}-${h.endLine} (similarity ${h.score.toFixed(2)})\n${await firstLines(view, h.path, h.startLine, h.endLine)}`));
+        return blocks.join("\n\n");
+      },
+    }),
+  };
 }
 
 // The first non-blank lines of a range, numbered: a preview to decide what to read.

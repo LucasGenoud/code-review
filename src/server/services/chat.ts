@@ -23,8 +23,9 @@ import { trimToolOutputs } from "./chatContext";
 import { chatInstructions, MODE_STEPS } from "./chatPrompts";
 import { InputError } from "./errors";
 import { resolveModel, type ResolvedModel } from "./providers";
-import { readRepoFile, repoMap, repoTools, ToolScope, type RepoView } from "./repoTools";
+import { readRepoFile, repoMap, repoTools, semanticTools, ToolScope, type RepoView } from "./repoTools";
 import { relevantCode } from "./retrieval";
+import { semanticSearch } from "./semanticIndex";
 import { runCode, usableLanguages } from "./sandbox";
 import { rangeLabel } from "./reviews";
 import type { RulesSnapshot } from "./rules";
@@ -47,6 +48,8 @@ const MAX_MAP_CHARS = 12_000;
 // MAX_SEED_CHARS.
 const SEED_SHARE = 0.04;
 const MAX_SEED_CHARS = 10_000;
+// Semantic search chunks fused into the seed.
+const SEED_SEMANTIC_HITS = 12;
 const SEED_HEADING = `## Likely relevant code
 Found by matching the question's words against the repository; lexical, so it can miss synonyms or include noise. Not shown to the developer.`;
 // The answer is forced once the conversation fills this share of the window.
@@ -299,7 +302,7 @@ async function turnSetup(view: RepoView, model: ResolvedModel, mode: ChatMode, c
   const [languages, map, seed] = await Promise.all([
     toolCalling ? usableLanguages() : [],
     toolCalling ? repoMap(view, mapChars) : "",
-    relevantCode(view, latestQuestion(messages), seedChars).catch(() => ""),
+    seedFor(view, latestQuestion(messages), seedChars),
   ]);
 
   const instructions = chatInstructions({
@@ -314,9 +317,21 @@ async function turnSetup(view: RepoView, model: ResolvedModel, mode: ChatMode, c
   return {
     instructions,
     history: withSeed(trimToolOutputs(messages), seed),
-    tools: toolCalling ? { ...repoTools(view, ToolScope.Chat), ...sandboxTools(view.project, languages) } : {},
+    tools: toolCalling ? { ...repoTools(view, ToolScope.Chat), ...semanticTools(view), ...sandboxTools(view.project, languages) } : {},
     budget: { steps: MODE_STEPS[mode], contextTokens: Math.floor(model.model.contextWindow * CONTEXT_SHARE) },
   };
+}
+
+// Code likely relevant to the question: word matches, fused with meaning
+// matches when the project has a semantic index. "" on failure: the turn
+// goes on without it.
+async function seedFor(view: RepoView, question: string, budget: number): Promise<string> {
+  if (!question) {
+    return "";
+  }
+
+  const semantic = (await semanticSearch(view.project.id, question, SEED_SEMANTIC_HITS).catch(() => null)) ?? [];
+  return relevantCode(view, question, budget, semantic).catch(() => "");
 }
 
 // Text of the last user message; "" for a compaction summary.
