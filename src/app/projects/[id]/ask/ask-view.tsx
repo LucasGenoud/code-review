@@ -21,14 +21,17 @@ import {
   renameCodebaseThread,
   startCodebaseThread,
   type ChatModelInfo,
+  type NoteView,
   type ThreadSummary,
 } from "@/app/actions";
 import { FileSheet, type FileRef } from "./file-sheet";
+import { MemoryList, NoteDialog, noteTitle, type NoteTarget } from "./memory";
 
 // Ask the codebase, full page:
 //
 //   ┌ history ─────────┬ title · model ───────────────────────────┐
 //   │ [+ New chat]     │                                           │
+//   │ Chats | Memory   │                                           │
 //   │ Today            │   conversation (centered column)          │
 //   │  How are errors… │                                           │
 //   │ Previous 7 days  │   [ composer                          ]   │
@@ -58,6 +61,12 @@ const DAY_MS = 86_400_000;
 const WEEK_DAYS = 7;
 const MIN_COMPACT_MESSAGES = 2;
 
+// What the sidebar lists: conversations, or project memory notes.
+enum SidebarTab {
+  Chats = "chats",
+  Memory = "memory",
+}
+
 // The conversation on screen. `key` remounts the chat when switching.
 type Active = { key: string; threadId: number | null; messages: UIMessage[] };
 
@@ -67,12 +76,16 @@ type Props = {
   initialThreads: ThreadSummary[];
   initialThreadId: number | null;
   initialMessages: UIMessage[];
+  initialNotes: NoteView[];
 };
 
 let newChats = 0;
 
-export function AskView({ project, model, initialThreads, initialThreadId, initialMessages }: Props) {
+export function AskView({ project, model, initialThreads, initialThreadId, initialMessages, initialNotes }: Props) {
   const [threads, setThreads] = useState(initialThreads);
+  const [notes, setNotes] = useState(initialNotes);
+  const [noteTarget, setNoteTarget] = useState<NoteTarget | null>(null);
+  const [tab, setTab] = useState(SidebarTab.Chats);
   const [active, setActive] = useState<Active>(() => ({
     key: threadKey(initialThreadId),
     threadId: initialThreadId,
@@ -179,16 +192,48 @@ export function AskView({ project, model, initialThreads, initialThreadId, initi
     setThreads((all) => all.map((t) => (t.id === threadId ? { ...t, title: title.trim() } : t)));
   }
 
+  // A saved note goes to the top; an edited one is replaced in place.
+  function noteSaved(note: NoteView) {
+    setNotes((all) => [note, ...all.filter((n) => n.id !== note.id)]);
+    setNoteTarget((t) => (t && "note" in t ? { note } : t));
+  }
+
   const title = threads.find((t) => t.id === active.threadId)?.title ?? "New conversation";
   const history = (
-    <ThreadList
-      threads={threads}
-      activeId={active.threadId}
-      opening={opening}
-      onOpen={(id) => void open(id)}
-      onRename={(id, t) => void rename(id, t)}
-      onDelete={remove}
-    />
+    <>
+      <div role="tablist" aria-label="Sidebar" className="mb-2 grid grid-cols-2 gap-1 rounded-lg bg-muted p-0.5 text-xs">
+        {[
+          { value: SidebarTab.Chats, label: "Chats" },
+          { value: SidebarTab.Memory, label: `Memory${notes.length > 0 ? ` (${notes.length})` : ""}` },
+        ].map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.value}
+            onClick={() => setTab(t.value)}
+            className={cn(
+              "rounded-md px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+              tab === t.value ? "bg-background font-medium shadow-xs" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === SidebarTab.Chats ? (
+        <ThreadList
+          threads={threads}
+          activeId={active.threadId}
+          opening={opening}
+          onOpen={(id) => void open(id)}
+          onRename={(id, t) => void rename(id, t)}
+          onDelete={remove}
+        />
+      ) : (
+        <MemoryList notes={notes} onOpen={(note) => setNoteTarget({ note })} />
+      )}
+    </>
   );
 
   return (
@@ -236,12 +281,22 @@ export function AskView({ project, model, initialThreads, initialThreadId, initi
           beforeSend={beforeSend}
           onAnswered={onAnswered}
           onOpenFile={(path, line) => setViewing({ path, line })}
+          onSaveAnswer={(answer, question) => setNoteTarget({ draft: { title: noteTitle(question), body: answer } })}
           columnClassName="mx-auto w-full max-w-3xl"
           footer={(chat) => <TokenMeter chat={chat} model={model} projectId={project.id} threadId={active.threadId} />}
         />
       </section>
 
       <FileSheet projectId={project.id} file={viewing} onClose={() => setViewing(null)} />
+
+      <NoteDialog
+        projectId={project.id}
+        target={noteTarget}
+        onClose={() => setNoteTarget(null)}
+        onSaved={noteSaved}
+        onDeleted={(id) => setNotes((all) => all.filter((n) => n.id !== id))}
+        onOpenFile={(path, line) => setViewing({ path, line })}
+      />
 
       <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
         <SheetContent side="left" className="w-72 gap-0 p-0">

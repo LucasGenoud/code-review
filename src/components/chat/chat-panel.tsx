@@ -77,11 +77,13 @@ type Props = {
   onCite?: (id: number) => void;
   // Opens a file cited as path:line.
   onOpenFile?: (path: string, line: number) => void;
+  // Offers "Save to memory" on answers: the answer and its question.
+  onSaveAnswer?: (answer: string, question: string) => void;
 };
 
 export function ChatPanel(props: Props) {
   const { ref, id, api, starters, placeholder, initialMessages, beforeSend, onAnswered, footer, columnClassName } = props;
-  const { findingIds = NO_FINDINGS, onCite = () => {}, onOpenFile } = props;
+  const { findingIds = NO_FINDINGS, onCite = () => {}, onOpenFile, onSaveAnswer } = props;
 
   // GET (reconnect) and DELETE (stop) go to the same endpoint, with the
   // body as query, e.g. /api/projects/1/chat?threadId=3.
@@ -185,7 +187,15 @@ export function ChatPanel(props: Props) {
             ) : (
               <div className="flex flex-col gap-5">
                 {messages.map((m) => (
-                  <ChatMessage key={m.id} message={m} findingIds={findingIds} onCite={onCite} onOpenFile={onOpenFile} onAsk={(text) => void send(text)} />
+                  <ChatMessage
+                    key={m.id}
+                    message={m}
+                    findingIds={findingIds}
+                    onCite={onCite}
+                    onOpenFile={onOpenFile}
+                    onAsk={(text) => void send(text)}
+                    onSave={onSaveAnswer && m.role === "assistant" ? (answer) => onSaveAnswer(answer, questionBefore(messages, m.id)) : undefined}
+                  />
                 ))}
                 {status === "submitted" && <p className="animate-pulse text-sm text-muted-foreground">Thinking…</p>}
               </div>
@@ -459,4 +469,11 @@ function Starters({ starters, onPick }: { starters: string[]; onPick: (text: str
       ))}
     </div>
   );
+}
+
+// Text of the question an answer replies to: the user message before it.
+function questionBefore(messages: UIMessage[], answerId: string): string {
+  const at = messages.findIndex((m) => m.id === answerId);
+  const question = messages.slice(0, at).findLast((m) => m.role === "user");
+  return question?.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n") ?? "";
 }

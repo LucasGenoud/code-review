@@ -5,7 +5,7 @@ import { MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { codebaseChatModel, getProject, listCodebaseThreads, loadCodebaseThread } from "@/app/actions";
+import { codebaseChatModel, getProject, listCodebaseThreads, listProjectNotes, loadCodebaseThread } from "@/app/actions";
 import { AskView } from "./ask-view";
 
 // Ask the codebase: read-only Q&A about the working tree, with a history
@@ -32,7 +32,7 @@ async function Ask({ params, searchParams }: AskProps) {
   }
 
   const { project } = await getProject(id).catch(() => notFound());
-  const [threads, model] = await Promise.all([listCodebaseThreads(id), codebaseChatModel(id)]);
+  const [threads, model, notes] = await Promise.all([listCodebaseThreads(id), codebaseChatModel(id), listProjectNotes(id)]);
   if (!model) {
     return <NoModel projectId={id} />;
   }
@@ -49,6 +49,7 @@ async function Ask({ params, searchParams }: AskProps) {
       initialThreads={threads}
       initialThreadId={threadId}
       initialMessages={messages}
+      initialNotes={notes}
     />
   );
 }

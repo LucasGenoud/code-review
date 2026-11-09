@@ -25,6 +25,7 @@ import { InputError } from "./errors";
 import { resolveModel, type ResolvedModel } from "./providers";
 import { readRepoFile, repoMap, repoTools, semanticTools, ToolScope, type RepoView } from "./repoTools";
 import { exploreTools } from "./explore";
+import { memoryContext, noteTools } from "./notes";
 import { relevantCode } from "./retrieval";
 import { semanticSearch } from "./semanticIndex";
 import { runCode, usableLanguages } from "./sandbox";
@@ -45,6 +46,9 @@ const MAX_TITLE_LENGTH = 80;
 // at most MAX_MAP_CHARS.
 const MAP_SHARE = 0.05;
 const MAX_MAP_CHARS = 12_000;
+// Project memory in the system prompt: this share, at most MAX_MEMORY_CHARS.
+const MEMORY_SHARE = 0.04;
+const MAX_MEMORY_CHARS = 12_000;
 // Code retrieved for the question (see retrieval): this share, at most
 // MAX_SEED_CHARS.
 const SEED_SHARE = 0.04;
@@ -308,10 +312,12 @@ async function turnSetup(view: RepoView, model: ResolvedModel, mode: ChatMode, c
 
   // Tokens of explorer sub-agents, counted into the answer's.
   const toolUsage = { input: 0, output: 0 };
+  const memory = memoryContext(view.project.id, Math.min(MAX_MEMORY_CHARS, Math.floor(contextWindow * MEMORY_SHARE * CHARS_PER_TOKEN)));
   const instructions = chatInstructions({
     mode,
     project: view.project,
     context,
+    memory: memory.text,
     repoMap: map,
     languages,
     tools: toolCalling,
@@ -320,7 +326,7 @@ async function turnSetup(view: RepoView, model: ResolvedModel, mode: ChatMode, c
   return {
     instructions,
     history: withSeed(trimToolOutputs(messages), seed),
-    tools: toolCalling ? { ...repoTools(view, ToolScope.Chat), ...semanticTools(view), ...exploreTools(view, model, toolUsage), ...sandboxTools(view.project, languages) } : {},
+    tools: toolCalling ? { ...repoTools(view, ToolScope.Chat), ...semanticTools(view), ...exploreTools(view, model, toolUsage), ...(memory.omitted ? noteTools(view.project.id) : {}), ...sandboxTools(view.project, languages) } : {},
     toolUsage,
     budget: { steps: MODE_STEPS[mode], contextTokens: Math.floor(model.model.contextWindow * CONTEXT_SHARE) },
   };

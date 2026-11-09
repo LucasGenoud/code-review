@@ -2,7 +2,7 @@
 
 import { Fragment } from "react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
-import { Brain, ChevronRight, FlaskConical, Layers, Loader2, Wrench } from "lucide-react";
+import { BookmarkPlus, Brain, ChevronRight, FlaskConical, Layers, Loader2, Wrench } from "lucide-react";
 import { cn } from "cn";
 import { SUMMARY_PREFIX, type ChatMetadata } from "@/lib/chat";
 import { CopyButton, Markdown, type CiteProps } from "./markdown";
@@ -16,9 +16,10 @@ type ReasoningPart = Extract<UIMessage["parts"][number], { type: "reasoning" }>;
 
 const RUN_CODE = "run_code";
 
-type Props = { message: UIMessage } & CiteProps;
+// onSave: offers "Save to memory" on answers; absent = not offered.
+type Props = { message: UIMessage; onSave?: (answer: string) => void } & CiteProps;
 
-export function ChatMessage({ message, ...cite }: Props) {
+export function ChatMessage({ message, onSave, ...cite }: Props) {
   if ((message.metadata as ChatMetadata | undefined)?.summary) {
     return <SummaryCard message={message} {...cite} />;
   }
@@ -51,11 +52,20 @@ export function ChatMessage({ message, ...cite }: Props) {
         return null;
       })}
       {answer && (
-        <CopyButton
-          text={answer}
-          label="Copy answer"
-          className="self-start opacity-0 transition-opacity group-hover/answer:opacity-100 focus-visible:opacity-100"
-        />
+        <div className="flex gap-1 self-start opacity-0 transition-opacity group-hover/answer:opacity-100 focus-within:opacity-100">
+          <CopyButton text={answer} label="Copy answer" />
+          {onSave && (
+            <button
+              type="button"
+              onClick={() => onSave(answer)}
+              title="Save to project memory: later chats start from it"
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <BookmarkPlus className="size-3" aria-hidden />
+              Save to memory
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

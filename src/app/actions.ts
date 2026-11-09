@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { refresh } from "next/cache";
 import * as chat from "@/server/services/chat";
 import { browse, type Listing } from "@/server/services/folders";
+import * as notes from "@/server/services/notes";
 import * as projects from "@/server/services/projects";
 import * as semantic from "@/server/services/semanticIndex";
 import { listReviews as reviewsOf } from "@/server/services/reviews";
@@ -20,6 +21,7 @@ export type { ChangedFile, CommitInfo, LanguageUsage, Project, ProjectRefs, Proj
 export type { ReviewSummary } from "@/server/services/reviews";
 export type { ChatModelInfo, ThreadSummary } from "@/server/services/chat";
 export type { SemanticStatus } from "@/lib/semantic";
+export type { NoteView } from "@/server/services/notes";
 export type { DiffSource, PastedFile };
 
 export async function listProjects() {
@@ -160,4 +162,22 @@ export async function stopSemanticIndex(id: number) {
 export async function removeSemanticIndex(id: number) {
   semantic.removeSemanticIndex(id);
   refresh();
+}
+
+// Project memory: answers saved for later chats.
+export async function listProjectNotes(projectId: number) {
+  await connection();
+  return notes.listNotes(projectId);
+}
+
+export async function saveProjectNote(projectId: number, input: { title: string; body: string }) {
+  return attempt(() => notes.saveNote(projectId, input));
+}
+
+export async function editProjectNote(projectId: number, id: number, input: { title: string; body: string }) {
+  return attempt(() => notes.editNote(projectId, id, input));
+}
+
+export async function deleteProjectNote(projectId: number, id: number) {
+  return attempt(() => notes.removeNote(projectId, id));
 }

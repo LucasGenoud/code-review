@@ -9,7 +9,8 @@ import type { SandboxLanguage } from "@/lib/sandbox";
 // path:line for every claim.
 //
 //   base (role, method, answer style) + mode task + diagram rules +
-//   context (project, review findings) + repository map + sandbox note
+//   context (project, review findings) + project memory + repository map
+//   + sandbox note
 
 // Tool rounds per answer. The last round can't call tools: the model must
 // answer with what it found (see streamChat's step budget).
@@ -101,6 +102,8 @@ type ChatPrompt = {
   project: { name: string; description: string };
   // Review chat: range, change overview and findings. "" for the codebase.
   context: string;
+  // Notes the developer saved (see notes.ts); "" without.
+  memory: string;
   repoMap: string;
   languages: SandboxLanguage[];
   // False when the model can't call tools: answer from the prompt.
@@ -117,6 +120,13 @@ export function chatInstructions(p: ChatPrompt): string {
 
   if (p.context) {
     parts.push(p.context);
+  }
+
+  if (p.memory) {
+    parts.push(`## Project memory
+Notes the developer saved from earlier answers, newest first. Use them as a head start, not as truth: the code may have changed since. Check the code before relying on a note, cite the code rather than the note, and say so when they disagree.
+
+${p.memory}`);
   }
 
   if (p.tools) {

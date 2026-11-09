@@ -113,6 +113,13 @@
       "when": 1794261755916,
       "tag": "0015_semantic_index",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1794262389255,
+      "tag": "0016_project_notes",
+      "breakpoints": true
     }
   ]
 }

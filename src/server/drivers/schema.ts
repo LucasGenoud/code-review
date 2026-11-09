@@ -25,6 +25,7 @@ import {
 //   category_overrides / rule_overrides: per-project tweaks of global rules
 //   rule_changes: LLM-proposed rule edits, accepted or rejected by the user
 //   projects ─< code_chunks (semantic search vectors, per embedding model)
+//   projects ─< project_notes (answers the developer saved to the chat's memory)
 
 function values<T extends Record<string, string>>(e: T): [string, ...string[]] {
   return Object.values(e) as [string, ...string[]];
@@ -339,6 +340,20 @@ export const codeChunks = sqliteTable(
   (t) => [index("code_chunks_project_model_path").on(t.projectId, t.model, t.path)],
 );
 
+// Project memory: answers the developer saved, given to later chats.
+export const projectNotes = sqliteTable("project_notes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  createdAt: createdAt(),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
 export type Provider = typeof providers.$inferSelect;
 export type Model = typeof models.$inferSelect;
 export type Project = typeof projects.$inferSelect;
@@ -353,3 +368,4 @@ export type Finding = typeof findings.$inferSelect;
 export type RuleChange = typeof ruleChanges.$inferSelect;
 export type RuleSet = typeof ruleSets.$inferSelect;
 export type ChatThreadRow = typeof chatThreads.$inferSelect;
+export type ProjectNote = typeof projectNotes.$inferSelect;
