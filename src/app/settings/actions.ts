@@ -9,7 +9,7 @@ import { attempt } from "../result";
 
 // Settings API: LLM providers, models and app-wide review settings.
 
-export type { AppSettings, PromptView, SandboxSettings } from "@/server/services/settings";
+export type { AppSettings, EmbeddingSettings, PromptView, SandboxSettings } from "@/server/services/settings";
 export type { SandboxStatus } from "@/lib/sandbox";
 export type { Model, ModelInput, ProviderInput, ProviderView } from "@/server/services/providers";
 
@@ -67,6 +67,19 @@ export async function getSandboxStatus() {
 
 export async function saveSandboxSettings(input: settings.SandboxSettings) {
   const result = await attempt(() => settings.saveSandboxSettings(input));
+  refresh();
+  return result;
+}
+
+export async function getEmbeddingSettings() {
+  await connection();
+  return settings.getEmbeddingSettings();
+}
+
+// Tests the embedding model with one call, then saves it. Returns its
+// vector size; null when semantic search was turned off.
+export async function saveEmbeddingSettings(input: settings.EmbeddingSettings) {
+  const result = await attempt(() => providers.setEmbeddingModel(input));
   refresh();
   return result;
 }

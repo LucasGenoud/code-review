@@ -2,6 +2,7 @@ import picomatch from "picomatch";
 import { matchCounts, trackedFiles } from "@/server/drivers/git";
 import { isTestPath } from "./paths";
 import { readRepoFile, type RepoView } from "./repoTools";
+import { semanticSearch, type SemanticHit } from "./semanticIndex";
 import { rankedFiles } from "./symbolIndex";
 import { outline } from "./symbols";
 
@@ -34,6 +35,11 @@ const DIRECTORY_WEIGHT = 1;
 const DECLARATION_WEIGHT = 1.5;
 // Tests and fixtures explain less than the code they exercise.
 const TEST_FACTOR = 0.6;
+// Semantic search: chunks asked for, the fusion constant (standard RRF k),
+// and lines of a matched chunk shown.
+const SEMANTIC_HITS = 12;
+const RRF_K = 60;
+const MEANING_LINES = 4;
 // Tie-breaker for files the codebase depends on (see symbolIndex): at most
 // this much, for the most depended-on file.
 const IMPORTANCE_WEIGHT = 2;
@@ -129,13 +135,37 @@ export async function relevantCode(view: RepoView, question: string, budget: num
   const files = await trackedFiles(view.project.path).catch(() => []);
   const mentioned = mentionedFiles(question, files);
   const terms = questionTerms(question);
-  if (terms.length === 0 && mentioned.length === 0) {
+  const semantic = (await semanticSearch(view.project.id, question, SEMANTIC_HITS).catch(() => null)) ?? [];
+  if (terms.length === 0 && mentioned.length === 0 && semantic.length === 0) {
     return "";
   }
 
   const read = cachedReader(view);
-  const ranked = await rankFiles(view, read, terms, files, mentioned);
-  return render(read, terms, ranked, budget);
+  const lexical = terms.length > 0 || mentioned.length > 0 ? await rankFiles(view, read, terms, files, mentioned) : [];
+  const meaning = new Map<string, SemanticHit>();
+  for (const hit of semantic) {
+    if (!meaning.has(hit.path)) {
+      meaning.set(hit.path, hit);
+    }
+  }
+
+  return render(read, terms, fuse(lexical, [...meaning.keys()], mentioned), budget, meaning);
+}
+
+// Reciprocal rank fusion of the word and meaning rankings: a file high in
+// either list ranks high, one high in both ranks highest. Named files stay first.
+function fuse(lexical: Candidate[], semantic: string[], mentioned: string[]): Candidate[] {
+  if (semantic.length === 0) {
+    return lexical;
+  }
+
+  const scores = new Map<string, number>();
+  const add = (file: string, rank: number) => scores.set(file, (scores.get(file) ?? 0) + 1 / (RRF_K + rank));
+  lexical.forEach((c, i) => add(c.file, i));
+  semantic.forEach((file, i) => add(file, i));
+
+  const fused = [...scores].map(([file, score]) => ({ file, score })).sort((a, b) => b.score - a.score);
+  return [...fused.filter((c) => mentioned.includes(c.file)), ...fused.filter((c) => !mentioned.includes(c.file))];
 }
 
 // The locate tool: files for terms the model picked, optionally in a glob.
@@ -245,7 +275,7 @@ function pathWeight(file: string, needle: string): number {
 //   40: export function refund(order: Order) {
 //   57:   const payment = order.payments[0];
 //   Also matching: src/pay.test.ts, docs/refunds.md
-async function render(read: Reader, terms: string[], ranked: Candidate[], budget: number): Promise<string> {
+async function render(read: Reader, terms: string[], ranked: Candidate[], budget: number, meaning = new Map<string, SemanticHit>()): Promise<string> {
   if (ranked.length === 0) {
     return "";
   }
@@ -256,7 +286,7 @@ async function render(read: Reader, terms: string[], ranked: Candidate[], budget
   let next = 0;
 
   for (; next < ranked.length; next++) {
-    const block = await fileBlock(read, ranked[next].file, terms);
+    const block = await fileBlock(read, ranked[next].file, terms, meaning.get(ranked[next].file));
     if (used + block.length > budget) {
       break;
     }
@@ -276,7 +306,8 @@ async function render(read: Reader, terms: string[], ranked: Candidate[], budget
 
 // A file's declarations and matching lines, in line order. Declarations
 // naming a term come first when the file has too many to show.
-async function fileBlock(read: Reader, file: string, terms: string[]): Promise<string> {
+// `meaning`: the chunk semantic search matched; its first lines are shown.
+async function fileBlock(read: Reader, file: string, terms: string[], meaning?: SemanticHit): Promise<string> {
   const content = await read(file);
   const lines = content.split(/\r?\n/);
   const needles = terms.map((t) => t.toLowerCase());
@@ -293,8 +324,10 @@ async function fileBlock(read: Reader, file: string, terms: string[]): Promise<s
     .sort((a, b) => b.hits - a.hits)
     .slice(0, MAX_HITS);
 
-  const shown = [...new Set([...shownDeclarations, ...hits].map((h) => h.line))].sort((a, b) => a - b);
+  const matched = meaning ? lines.slice(meaning.startLine - 1, meaning.endLine).flatMap((t, i) => (t.trim() ? [meaning.startLine + i] : [])).slice(0, MEANING_LINES) : [];
+  const shown = [...new Set([...shownDeclarations.map((h) => h.line), ...hits.map((h) => h.line), ...matched])].sort((a, b) => a - b);
   const body = shown.map((n) => `${n}: ${lines[n - 1].trim().slice(0, MAX_LINE_TEXT)}`).join("\n");
   const cut = declarations.length > MAX_DECLARATIONS ? `\n… ${declarations.length - MAX_DECLARATIONS} more declarations (outline shows all)` : "";
-  return `### ${file} (${lines.length} lines)\n${body}${cut}`;
+  const near = meaning ? ` · lines ${meaning.startLine}-${meaning.endLine} match by meaning` : "";
+  return `### ${file} (${lines.length} lines${near})\n${body}${cut}`;
 }

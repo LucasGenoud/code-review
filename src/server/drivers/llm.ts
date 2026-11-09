@@ -4,6 +4,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
+  embedMany,
   generateId,
   generateText,
   NoObjectGeneratedError,
@@ -378,6 +379,36 @@ function finalStep(
   }
 
   return { toolChoice: "none", instructions: instructions + BUDGET_SPENT };
+}
+
+// --- embeddings --------------------------------------------------------------
+
+// An OpenAI or OpenAI-compatible /embeddings endpoint, e.g. OpenAI
+// text-embedding-3-small, Ollama nomic-embed-text.
+export type EmbeddingConfig = Pick<ModelConfig, "kind" | "baseUrl" | "apiKey" | "name">;
+
+// Requests in flight per embedMany call.
+const EMBED_PARALLEL = 2;
+
+// One vector per value, in order, and the tokens spent.
+export async function embedTexts(cfg: EmbeddingConfig, values: string[], signal?: AbortSignal): Promise<{ vectors: Float32Array[]; tokens: number }> {
+  const result = await embedMany({ model: embeddingModel(cfg), values, maxParallelCalls: EMBED_PARALLEL, abortSignal: signal });
+  return { vectors: result.embeddings.map((e) => Float32Array.from(e)), tokens: result.usage.tokens };
+}
+
+function embeddingModel(cfg: EmbeddingConfig) {
+  const apiKey = cfg.apiKey ?? undefined;
+  const baseURL = cfg.baseUrl ?? undefined;
+
+  if (cfg.kind === ProviderKind.OpenAI) {
+    return createOpenAI({ apiKey, baseURL }).embeddingModel(cfg.name);
+  }
+
+  if (cfg.kind !== ProviderKind.Compatible || !baseURL) {
+    throw new Error("Embeddings need an OpenAI or OpenAI-compatible provider with a base URL");
+  }
+
+  return createOpenAICompatible({ name: COMPATIBLE_NAME, baseURL, apiKey }).embeddingModel(cfg.name);
 }
 
 // A chat stream's bytes (e.g. replayed) as a useChat response.

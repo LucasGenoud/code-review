@@ -10,6 +10,7 @@ import { headContent } from "./diff";
 import { parseDiff } from "./diffParse";
 import { isInside } from "./paths";
 import { locateCode } from "./retrieval";
+import { hasSemanticIndex, semanticSearch } from "./semanticIndex";
 import { keyFiles } from "./symbolIndex";
 import { declarationEnd, definitionPattern, outline } from "./symbols";
 
@@ -41,6 +42,9 @@ const MAX_SEARCH_CONTEXT = 5;
 const TALLY_FILES = 6;
 const DEFAULT_LOG_ENTRIES = 15;
 const MAX_LOG_ENTRIES = 50;
+// semantic_search: chunks returned, and code lines shown per chunk.
+const SEMANTIC_RESULTS = 8;
+const PREVIEW_LINES = 4;
 // Lines blamed per call, and lines of a shown commit.
 const MAX_BLAME_LINES = 200;
 const MAX_SHOW_LINES = 400;
@@ -177,6 +181,27 @@ export function repoTools(view: RepoView, scope: ToolScope): Record<string, Chat
     }),
   };
 
+  // Only once the project has a semantic index (project page → Semantic search).
+  if (hasSemanticIndex(project.id)) {
+    tools.semantic_search = defineTool({
+      description:
+        "Find code by meaning when you don't know its names: returns the code chunks closest to a description, with line ranges and their first lines. Describe the behavior, e.g. \"retry a payment after the card is declined\". Complements locate, which matches words.",
+      input: z.object({
+        query: z.string().min(3),
+        glob: z.string().nullable().describe("Only files matching, e.g. src/server/**"),
+      }),
+      run: async ({ query, glob }) => {
+        const hits = await semanticSearch(project.id, query, SEMANTIC_RESULTS, glob);
+        if (!hits || hits.length === 0) {
+          return "(no matches)";
+        }
+
+        const blocks = await Promise.all(hits.map(async (h) => `${h.path}:${h.startLine}-${h.endLine} (similarity ${h.score.toFixed(2)})\n${await firstLines(view, h.path, h.startLine, h.endLine)}`));
+        return blocks.join("\n\n");
+      },
+    });
+  }
+
   if (scope === ToolScope.Chat) {
     tools.git_log = defineTool({
       description: "Recent commits, optionally for one file or since a date: who changed it, when, why.",
@@ -226,6 +251,13 @@ async function symbolBlocks(view: RepoView, name: string, only: string | null, l
   const blocks = await Promise.all(hits.slice(0, limit).map((hit) => symbolBlock(view, hit)));
   const more = hits.length > limit ? `\n\n… ${hits.length - limit} more declarations of ${name}: ${hits.slice(limit).map(location).join(", ")}` : "";
   return blocks.join("\n\n") + more;
+}
+
+// The first non-blank lines of a range, numbered: a preview to decide what to read.
+async function firstLines(view: RepoView, file: string, from: number, to: number): Promise<string> {
+  const lines = ((await readRepoFile(view, file)) ?? "").split(/\r?\n/).slice(from - 1, to);
+  const kept = lines.flatMap((text, i) => (text.trim() ? [`${from + i}: ${text}`] : [])).slice(0, PREVIEW_LINES);
+  return kept.join("\n");
 }
 
 // "src/pay.ts:40-62\n40   export function pay(…) {…" for one definition hit.

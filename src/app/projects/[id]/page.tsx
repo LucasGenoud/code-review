@@ -10,19 +10,21 @@ import { AutoRefresh } from "@/components/projects/auto-refresh";
 import { ConfirmButton } from "@/components/projects/confirm-button";
 import { formatCost, ReviewStatusBadge, timeAgo } from "@/components/projects/review-status";
 import { ReviewStatus } from "@/lib/domain";
-import { getProject, listReviews, projectLanguages, projectRefs, type ReviewSummary } from "@/app/actions";
+import { getProject, listReviews, projectLanguages, projectRefs, semanticStatus, type ReviewSummary } from "@/app/actions";
 import { removeReview } from "@/app/reviews/actions";
 import { listRuleSets, projectRules } from "@/app/rules/actions";
 import { getSettings, listModelOptions } from "@/app/settings/actions";
 import { DescriptionPanel } from "./description-panel";
 import { LanguagesPanel } from "./languages-panel";
+import { SemanticPanel } from "./semantic-panel";
 import { NewReviewForm } from "./new-review-form";
 import { SettingsPanel } from "./settings-panel";
 
 // Project home:
 //   ┌ header: name, path, Ask the codebase, Rules ─────────┐
 //   │ New review (primary)          │ Description          │
-//   │ Review history                │ Languages, Settings  │
+//   │ Review history                │ Languages, Settings, │
+//   │                               │ Semantic search      │
 //   └───────────────────────────────┴──────────────────────┘
 export default function ProjectPage({ params }: PageProps<"/projects/[id]">) {
   return (
@@ -108,10 +110,17 @@ async function ProjectView({ params }: { params: Promise<{ id: string }> }) {
             <Languages projectId={id} />
           </Suspense>
           <SettingsPanel project={project} models={models} ruleSets={ruleSets} />
+          <Suspense fallback={<Skeleton className="h-24 w-full" />}>
+            <Semantic projectId={id} />
+          </Suspense>
         </aside>
       </div>
     </div>
   );
+}
+
+async function Semantic({ projectId }: { projectId: number }) {
+  return <SemanticPanel projectId={projectId} initial={await semanticStatus(projectId)} />;
 }
 
 function NoModelCallout({ hasModels }: { hasModels: boolean }) {

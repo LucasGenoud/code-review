@@ -56,3 +56,8 @@ export function decrypt(stored: string): string {
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
 }
+
+// Short fingerprint of a text, e.g. to tell whether a file changed.
+export function contentHash(text: string): string {
+  return crypto.createHash("sha1").update(text).digest("hex");
+}

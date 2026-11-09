@@ -5,6 +5,7 @@ import { refresh } from "next/cache";
 import * as chat from "@/server/services/chat";
 import { browse, type Listing } from "@/server/services/folders";
 import * as projects from "@/server/services/projects";
+import * as semantic from "@/server/services/semanticIndex";
 import { listReviews as reviewsOf } from "@/server/services/reviews";
 import { startReview as start } from "@/server/services/review/engine";
 import type { DiffSource, PastedFile } from "@/server/services/diff";
@@ -18,6 +19,7 @@ export type { Result } from "./result";
 export type { ChangedFile, CommitInfo, LanguageUsage, Project, ProjectRefs, ProjectSettings } from "@/server/services/projects";
 export type { ReviewSummary } from "@/server/services/reviews";
 export type { ChatModelInfo, ThreadSummary } from "@/server/services/chat";
+export type { SemanticStatus } from "@/lib/semantic";
 export type { DiffSource, PastedFile };
 
 export async function listProjects() {
@@ -138,4 +140,24 @@ export async function startReview(projectId: number, source: DiffSource, ruleIds
   const result = await attempt(() => start(projectId, source, ruleIds, pasted));
   refresh();
   return result;
+}
+
+// Semantic search index of a project: status (polled while building),
+// build or update, stop, delete.
+export async function semanticStatus(id: number) {
+  await connection();
+  return semantic.semanticStatus(id);
+}
+
+export async function buildSemanticIndex(id: number) {
+  return attempt(() => semantic.buildSemanticIndex(id));
+}
+
+export async function stopSemanticIndex(id: number) {
+  semantic.stopSemanticIndex(id);
+}
+
+export async function removeSemanticIndex(id: number) {
+  semantic.removeSemanticIndex(id);
+  refresh();
 }

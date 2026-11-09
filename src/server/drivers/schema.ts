@@ -1,4 +1,4 @@
-import { integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { blob, index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import {
   CategoryKind,
   ChangeKind,
@@ -24,6 +24,7 @@ import {
 //   categories (project_id null = global) ─< rules (project_id set = project-only)
 //   category_overrides / rule_overrides: per-project tweaks of global rules
 //   rule_changes: LLM-proposed rule edits, accepted or rejected by the user
+//   projects ─< code_chunks (semantic search vectors, per embedding model)
 
 function values<T extends Record<string, string>>(e: T): [string, ...string[]] {
   return Object.values(e) as [string, ...string[]];
@@ -317,6 +318,26 @@ export const ruleSets = sqliteTable("rule_sets", {
   ruleIds: text("rule_ids").notNull(),
   createdAt: createdAt(),
 });
+
+// Semantic search: a project's code in chunks, each with its embedding
+// (Float32 values) from `model`. version: the file's blob id, or a content
+// hash for files changed in the working tree; unchanged files keep theirs.
+export const codeChunks = sqliteTable(
+  "code_chunks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    model: text("model").notNull(),
+    path: text("path").notNull(),
+    version: text("version").notNull(),
+    startLine: integer("start_line").notNull(),
+    endLine: integer("end_line").notNull(),
+    vector: blob("vector", { mode: "buffer" }).notNull(),
+  },
+  (t) => [index("code_chunks_project_model_path").on(t.projectId, t.model, t.path)],
+);
 
 export type Provider = typeof providers.$inferSelect;
 export type Model = typeof models.$inferSelect;

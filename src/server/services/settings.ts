@@ -8,6 +8,9 @@ enum Key {
   PassThreshold = "pass_threshold",
   SandboxEnabled = "sandbox_enabled",
   SandboxTimeout = "sandbox_timeout",
+  EmbeddingProvider = "embedding_provider_id",
+  EmbeddingModel = "embedding_model",
+  EmbeddingQueryPrefix = "embedding_query_prefix",
 }
 
 const DEFAULT_SANDBOX_TIMEOUT = 10;
@@ -86,6 +89,36 @@ export function saveSettings(input: AppSettings): void {
   writeSetting(Key.DefaultModel, s.defaultModelId === null ? "" : String(s.defaultModelId));
   writeSetting(Key.IgnoreGlobs, s.ignoreGlobs);
   writeSetting(Key.PassThreshold, String(s.passThreshold));
+}
+
+// --- semantic search ---------------------------------------------------------
+
+// The embedding model of semantic search: a provider's model id, e.g.
+// text-embedding-3-small. Unset = semantic search off. queryPrefix goes
+// before search queries only, for instruction-aware models, e.g. Harrier or
+// Qwen3-Embedding: "Instruct: <task>\nQuery: ", nomic: "search_query: ".
+export type EmbeddingSettings = { providerId: number | null; model: string; queryPrefix: string };
+
+const embeddingSchema = z.object({
+  providerId: z.number().int().nullable(),
+  model: z.string().trim().max(200),
+  queryPrefix: z.string().max(1000),
+});
+
+export function getEmbeddingSettings(): EmbeddingSettings {
+  const provider = readSetting(Key.EmbeddingProvider);
+  return {
+    providerId: provider ? Number(provider) : null,
+    model: readSetting(Key.EmbeddingModel) ?? "",
+    queryPrefix: readSetting(Key.EmbeddingQueryPrefix) ?? "",
+  };
+}
+
+export function saveEmbeddingSettings(input: EmbeddingSettings): void {
+  const s = embeddingSchema.parse(input);
+  writeSetting(Key.EmbeddingProvider, s.providerId === null ? "" : String(s.providerId));
+  writeSetting(Key.EmbeddingModel, s.model);
+  writeSetting(Key.EmbeddingQueryPrefix, s.queryPrefix);
 }
 
 // --- prompts ---------------------------------------------------------------

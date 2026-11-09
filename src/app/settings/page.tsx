@@ -8,12 +8,14 @@ import { ProviderDialog } from "@/components/settings/provider-dialog";
 import { PromptsSection } from "@/components/settings/prompts-section";
 import { ReviewSettingsForm } from "@/components/settings/review-settings-form";
 import { SandboxSection } from "@/components/settings/sandbox-section";
-import { getSandboxStatus, getSettings, listModelOptions, listPrompts, listProviders } from "./actions";
+import { EmbeddingSection } from "@/components/settings/embedding-section";
+import { ProviderKind } from "@/lib/domain";
+import { getEmbeddingSettings, getSandboxStatus, getSettings, listModelOptions, listPrompts, listProviders } from "./actions";
 
 // Settings:
 //   setup steps (until a default model exists)
 //   providers ─< models
-//   review settings, prompts, code sandbox
+//   review settings, prompts, semantic search, code sandbox
 export default function SettingsPage() {
   return (
     <main className="mx-auto w-full max-w-4xl px-4 py-8">
@@ -30,13 +32,17 @@ export default function SettingsPage() {
 }
 
 async function SettingsView() {
-  const [providers, settings, models, sandbox, prompts] = await Promise.all([
+  const [providers, settings, models, sandbox, prompts, embedding] = await Promise.all([
     listProviders(),
     getSettings(),
     listModelOptions(),
     getSandboxStatus(),
     listPrompts(),
+    getEmbeddingSettings(),
   ]);
+
+  // Anthropic has no embeddings API.
+  const embeddingProviders = providers.filter((p) => p.kind !== ProviderKind.Anthropic).map((p) => ({ id: p.id, label: p.name }));
 
   const steps = [
     { label: "Add a provider", hint: "OpenAI, Anthropic or any OpenAI-compatible server.", done: providers.length > 0 },
@@ -78,6 +84,10 @@ async function SettingsView() {
 
       <Section title="Prompts">
         <PromptsSection prompts={prompts} />
+      </Section>
+
+      <Section title="Semantic search">
+        <EmbeddingSection key={JSON.stringify(embedding)} settings={embedding} providers={embeddingProviders} />
       </Section>
 
       <Section title="Code sandbox">

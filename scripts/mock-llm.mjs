@@ -6,7 +6,7 @@
 // Usage: node scripts/mock-llm.mjs [port]   (default 4010)
 // In the app: Settings → add provider "OpenAI-compatible",
 //   base URL http://localhost:4010/v1 (Docker: http://host.docker.internal:4010/v1),
-//   model "mock-reviewer".
+//   model "mock-reviewer"; for semantic search, embedding model "mock-embed".
 import http from "node:http";
 
 const PORT = Number(process.argv[2] ?? 4010);
@@ -16,6 +16,36 @@ const MAX_DELAY_MS = 1200;
 const MAX_FINDINGS = 2;
 const HTTP_OK = 200;
 const HTTP_NOT_FOUND = 404;
+
+// Embeddings: word counts hashed into EMBED_DIMENSIONS buckets (camelCase
+// split), so texts sharing words are close. Enough to try semantic search.
+const EMBED_MODEL = "mock-embed";
+const EMBED_DIMENSIONS = 256;
+
+function embedText(text) {
+  const v = new Array(EMBED_DIMENSIONS).fill(0);
+  const words = text.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().match(/[a-z]{3,}/g) ?? [];
+  for (const w of words) {
+    let h = 0;
+    for (const c of w) {
+      h = (h * 31 + c.charCodeAt(0)) % EMBED_DIMENSIONS;
+    }
+    v[h] += 1;
+  }
+  return v;
+}
+
+async function embeddings(req, res) {
+  let raw = "";
+  for await (const part of req) {
+    raw += part;
+  }
+
+  const input = [JSON.parse(raw).input].flat();
+  const tokens = Math.ceil(input.join(" ").length / 4);
+  res.writeHead(HTTP_OK, { "content-type": "application/json" });
+  res.end(JSON.stringify({ object: "list", model: EMBED_MODEL, data: input.map((t, index) => ({ object: "embedding", index, embedding: embedText(t) })), usage: { prompt_tokens: tokens, total_tokens: tokens } }));
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const delay = () => sleep(MIN_DELAY_MS + Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS));
@@ -248,7 +278,12 @@ async function stream(res, body, content) {
 const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url.endsWith("/models")) {
     res.writeHead(HTTP_OK, { "content-type": "application/json" });
-    res.end(JSON.stringify({ object: "list", data: [{ id: MODEL, object: "model" }] }));
+    res.end(JSON.stringify({ object: "list", data: [{ id: MODEL, object: "model" }, { id: EMBED_MODEL, object: "model" }] }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url.endsWith("/embeddings")) {
+    await embeddings(req, res);
     return;
   }
 

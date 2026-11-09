@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ProviderKind } from "@/lib/domain";
 import { decrypt, encrypt } from "@/server/drivers/crypto";
-import { listModelNames, type ModelConfig } from "@/server/drivers/llm";
+import { embedTexts, listModelNames, type EmbeddingConfig, type ModelConfig } from "@/server/drivers/llm";
 import {
   allModels,
   allProviders,
@@ -16,7 +16,7 @@ import {
 } from "@/server/drivers/providerStore";
 import type { Model, Provider } from "@/server/drivers/schema";
 import { InputError } from "./errors";
-import { getSettings, saveSettings } from "./settings";
+import { getEmbeddingSettings, getSettings, saveEmbeddingSettings, saveSettings, type EmbeddingSettings } from "./settings";
 
 export type { Model };
 
@@ -151,6 +151,44 @@ export function resolveModel(modelId: number | null): ResolvedModel {
       maxOutputTokens: model.maxOutputTokens,
     },
   };
+}
+
+// The embedding model of semantic search; null when none is set.
+export function resolveEmbedding(): EmbeddingConfig | null {
+  const { providerId, model } = getEmbeddingSettings();
+  const p = providerId === null ? undefined : providerById(providerId);
+  if (!p || !model) {
+    return null;
+  }
+
+  return { kind: p.kind, baseUrl: p.baseUrl, apiKey: p.apiKey ? decrypt(p.apiKey) : null, name: model };
+}
+
+// Saves the embedding model after one test call, so a wrong model id or a
+// provider without embeddings fails here, not mid-index. Returns the
+// vector size. Empty model = semantic search off.
+export async function setEmbeddingModel(input: EmbeddingSettings): Promise<number | null> {
+  if (input.providerId === null || !input.model.trim()) {
+    saveEmbeddingSettings({ providerId: null, model: "", queryPrefix: "" });
+    return null;
+  }
+
+  const p = providerById(input.providerId);
+  if (!p) {
+    throw new InputError("Unknown provider");
+  }
+
+  if (p.kind === ProviderKind.Anthropic) {
+    throw new InputError("Anthropic has no embeddings API: pick an OpenAI or OpenAI-compatible provider.");
+  }
+
+  const cfg = { kind: p.kind, baseUrl: p.baseUrl, apiKey: p.apiKey ? decrypt(p.apiKey) : null, name: input.model.trim() };
+  const test = await embedTexts(cfg, ["function add(a, b) { return a + b; }"]).catch((e: Error) => {
+    throw new InputError(`Embedding test failed: ${e.message}`);
+  });
+
+  saveEmbeddingSettings({ providerId: p.id, model: cfg.name, queryPrefix: input.queryPrefix });
+  return test.vectors[0].length;
 }
 
 // USD for token counts, or null when the model has no prices set.
