@@ -185,7 +185,7 @@ export function ChatPanel(props: Props) {
             ) : (
               <div className="flex flex-col gap-5">
                 {messages.map((m) => (
-                  <ChatMessage key={m.id} message={m} findingIds={findingIds} onCite={onCite} onOpenFile={onOpenFile} />
+                  <ChatMessage key={m.id} message={m} findingIds={findingIds} onCite={onCite} onOpenFile={onOpenFile} onAsk={(text) => void send(text)} />
                 ))}
                 {status === "submitted" && <p className="animate-pulse text-sm text-muted-foreground">Thinking…</p>}
               </div>

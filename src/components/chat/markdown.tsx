@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "cn";
+import { MermaidDiagram } from "./mermaid-diagram";
 
 // Chat answers as GitHub-flavored markdown: lists, tables, links,
 // highlighted code with a copy button. References become buttons:
@@ -14,6 +15,7 @@ import { cn } from "cn";
 //   #12              → onCite(12), when 12 is a finding of the review
 //   `src/app.ts:40`  → onOpenFile("src/app.ts", 40)
 //   src/app.ts:40    → same, outside code (needs a "/" to tell it from host:port)
+//   ```mermaid       → a rendered diagram (see MermaidDiagram)
 
 export type CiteProps = {
   // Finding ids that "#12" can jump to.
@@ -21,6 +23,8 @@ export type CiteProps = {
   onCite: (id: number) => void;
   // Opens a cited file at a line; absent = citations stay plain text.
   onOpenFile?: (path: string, line: number) => void;
+  // Sends a chat message, e.g. "Fix diagram"; absent outside a chat.
+  onAsk?: (text: string) => void;
 };
 
 const COPIED_MS = 1500;
@@ -36,13 +40,14 @@ const CODE_FILE_REF = /^([\w./-]+\.\w{1,8}):(\d+)(?:-\d+)?$/;
 const FINDING_HREF = /^#finding-(\d+)$/;
 const FILE_HREF = /^#file=([^&]+)&line=(\d+)$/;
 const LANGUAGE_CLASS = /^language-(.+)$/;
+const MERMAID = "mermaid";
 
 // Markdown's AST node, as react-markdown passes it to components.
 type HastNode = { type: string; value?: string; children?: HastNode[]; properties?: { className?: unknown } };
 
-export function Markdown({ text, findingIds, onCite, onOpenFile }: { text: string } & CiteProps) {
+export function Markdown({ text, findingIds, onCite, onOpenFile, onAsk }: { text: string } & CiteProps) {
   const components: Components = {
-    pre: ({ node }) => <CodeBlock node={node as HastNode} />,
+    pre: ({ node }) => <CodeBlock node={node as HastNode} onOpenFile={onOpenFile} onAsk={onAsk} />,
     code: ({ children, node }) => <InlineCode text={hastText(node as HastNode)} onOpenFile={onOpenFile}>{children}</InlineCode>,
     a: ({ href = "", children }) => <Link href={href} onCite={onCite} onOpenFile={onOpenFile}>{children}</Link>,
     table: ({ children }) => (
@@ -139,12 +144,16 @@ function InlineCode({ text, children, onOpenFile }: InlineProps) {
   );
 }
 
-// Fenced code: language, copy button, highlighted lines.
-function CodeBlock({ node }: { node: HastNode }) {
+// Fenced code: language, copy button, highlighted lines. Mermaid fences
+// are drawn instead.
+function CodeBlock({ node, onOpenFile, onAsk }: { node: HastNode } & Pick<CiteProps, "onOpenFile" | "onAsk">) {
   const code = node.children?.find((c) => c.type === "element") ?? node;
   const classes = Array.isArray(code.properties?.className) ? (code.properties.className as string[]) : [];
   const language = classes.map((c) => LANGUAGE_CLASS.exec(c)?.[1]).find(Boolean) ?? "code";
   const text = hastText(code);
+  if (language === MERMAID) {
+    return <MermaidDiagram source={text} onOpenFile={onOpenFile} onAsk={onAsk} />;
+  }
 
   return (
     <div className="overflow-hidden rounded-md border bg-muted/50">

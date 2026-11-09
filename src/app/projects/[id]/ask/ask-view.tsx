@@ -40,7 +40,7 @@ import { FileSheet, type FileRef } from "./file-sheet";
 
 const STARTERS = [
   "Give me a tour of this codebase",
-  "Where is the entry point and how does a request flow?",
+  "Draw a diagram of how a request flows through the app",
   "Which parts look fragile or untested?",
   "How are errors handled?",
 ];

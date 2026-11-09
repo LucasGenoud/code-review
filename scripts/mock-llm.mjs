@@ -181,9 +181,48 @@ function toolCall(name, args) {
   return { tool_calls: [{ id: `call-${Date.now()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] };
 }
 
+// Asked to draw (or "draw broken", to see the error state): a Mermaid answer.
+const DRAW = /diagram|draw|schema/i;
+const BROKEN = /broken/i;
+
+const DIAGRAM_ANSWER = `The diagram shows a codebase question, from the browser to the model.
+
+\`\`\`mermaid
+flowchart TD
+  subgraph ui ["Browser"]
+    A1["ChatPanel send()<br/>src/components/chat/chat-panel.tsx:114"]
+  end
+  subgraph api ["API"]
+    B1["POST /chat<br/>src/app/api/projects/[id]/chat/route.ts:10"]
+  end
+  subgraph svc ["Services"]
+    C1["projectChatResponse()<br/>src/server/services/chat.ts:206"]
+    C2["relevantCode()<br/>src/server/services/retrieval.ts:120"]
+  end
+  subgraph drv ["Drivers"]
+    D1["streamChat()<br/>src/server/drivers/llm.ts:250"]
+  end
+  A1 -->|"messages, mode"| B1
+  B1 --> C1
+  C1 -->|"question"| C2
+  C1 --> D1
+  D1 -->|"stream"| A1
+\`\`\`
+
+**Steps**
+1. src/components/chat/chat-panel.tsx:114 sends the question.
+2. src/server/services/chat.ts:206 builds the turn and attaches retrieved code.
+3. src/server/drivers/llm.ts:250 streams the answer back.`;
+
+const BROKEN_DIAGRAM = "Here it is:\n\n\`\`\`mermaid\nflowchart TD\n  A[\"start\" --> B(end\n\`\`\`";
+
 function chatAnswer(body) {
   const last = [...body.messages].reverse().find((m) => m.role === "user");
   const question = text(last?.content).slice(0, 120);
+  if (DRAW.test(question)) {
+    return BROKEN.test(question) ? BROKEN_DIAGRAM : DIAGRAM_ANSWER;
+  }
+
   return `Mock answer. You asked: "${question}". A real model would read the code with the tools and explain the finding here.`;
 }
 

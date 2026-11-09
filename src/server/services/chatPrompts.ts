@@ -8,8 +8,8 @@ import type { SandboxLanguage } from "@/lib/sandbox";
 // step, pick the narrowest tool, stop once the evidence is in, and cite
 // path:line for every claim.
 //
-//   base (role, method, answer style) + mode task + context (project,
-//   review findings) + repository map + sandbox note
+//   base (role, method, answer style) + mode task + diagram rules +
+//   context (project, review findings) + repository map + sandbox note
 
 // Tool rounds per answer. The last round can't call tools: the model must
 // answer with what it found (see streamChat's step budget).
@@ -33,7 +33,27 @@ const BASE = (project: string, steps: number) => `You are a senior engineer pair
 
 ## Answer style
 - Lead with the answer in one or two sentences, then the supporting detail.
-- Markdown. Quote only the code lines that carry the point. No filler, no restating the question, no praise.`;
+- Markdown. Quote only the code lines that carry the point. No filler, no restating the question, no praise.
+- When a flow, a sequence of calls or a structure spans several files, add a Mermaid diagram (a \`\`\`mermaid block) if it reads faster than prose; it renders in the chat, and nodes that name path:line open the file. Follow the Diagrams section below.`;
+
+// Shared by every mode: the chat renders ```mermaid blocks with Mermaid 12.
+// The developer asks for diagrams in plain words ("draw", "schema", "chart
+// of"); each rule prevents a parse error models commonly make.
+const DIAGRAM_RULES = `## Diagrams
+When the developer asks to draw, diagram, map, chart or "show the schema of" something, answer with a Mermaid diagram drawn from the real code, not from names: find the entry point, follow the calls across files, and note path:line for each step you draw. Answer with:
+1. One sentence saying what the diagram shows and where it starts.
+2. The diagram, in a \`\`\`mermaid block.
+3. **Steps**: a numbered list matching the diagram, one line each with path:line and what happens there.
+4. **Notes**: only non-obvious points: branches, async boundaries, caching, error paths left out of the diagram.
+
+Rules:
+- One diagram per question unless asked for more, at most about 25 nodes: merge minor steps, leave out logging and error plumbing unless asked about.
+- Pick the type that fits: flowchart TD for control flow and pipelines, sequenceDiagram for calls between components over time, classDiagram for types and their relations, erDiagram for tables, stateDiagram-v2 for lifecycles.
+- Node ids: short letters and digits only (A1, svc, db). Put every label in double quotes: A1["startReview()<br/>src/server/reviews.ts:120"]. Inside labels, never use double quotes, and use <br/> for line breaks.
+- Name the real function, class or file in each label, and add its path:line on a second line for code you read; the developer clicks it to open the file.
+- Group by layer or module with subgraph id ["Label"] ... end. Edge labels: A1 -->|"on save"| B2.
+- sequenceDiagram: participant R as reviews.ts (no quotes), messages as R->>D: insertReview() src/server/drivers/reviewStore.ts:40, no semicolons or # in message text.
+- No click directives, styles, themes or init blocks: the chat themes the diagram.`;
 
 const TASKS: Record<ChatMode, string> = {
   [ChatMode.Ask]: `## Task: answer the question
@@ -88,6 +108,7 @@ export function chatInstructions(p: ChatPrompt): string {
   const parts = [
     BASE(p.project.name, MODE_STEPS[p.mode]),
     TASKS[p.mode],
+    DIAGRAM_RULES,
     `## Project\n${p.project.description || "(no description)"}`,
   ];
 
