@@ -45,7 +45,8 @@ export type Usage = { input: number; output: number };
 export type ChatTool<T extends z.ZodType = z.ZodType> = {
   description: string;
   input: T;
-  run: (input: z.infer<T>) => Promise<string>;
+  // signal: aborts with the turn, e.g. to stop a sub-agent the tool runs.
+  run: (input: z.infer<T>, signal?: AbortSignal) => Promise<string>;
 };
 
 // Keeps `run`'s input typed from the schema while storing tools in one record.
@@ -206,7 +207,7 @@ async function toolLoop(cfg: ModelConfig, req: Omit<AgentRequest<z.ZodType>, "sc
 function toolSet(tools: Record<string, ChatTool>): ToolSet {
   const set: ToolSet = {};
   for (const [name, t] of Object.entries(tools)) {
-    set[name] = tool({ description: t.description, inputSchema: t.input, execute: t.run });
+    set[name] = tool({ description: t.description, inputSchema: t.input, execute: (input, { abortSignal }) => t.run(input, abortSignal) });
   }
 
   return set;
@@ -240,6 +241,9 @@ type ChatRequest = {
   budget?: Budget;
   // Stops the answer; onEnd still saves what was generated.
   signal?: AbortSignal;
+  // Tokens tools spend during the turn (e.g. sub-agents), filled as they
+  // run; added to the answer's.
+  toolUsage?: Usage;
   onEnd: (messages: UIMessage[], usage: Usage) => void;
 };
 
@@ -270,13 +274,17 @@ export async function streamChat(cfg: ModelConfig, req: ChatRequest): Promise<Re
           return undefined;
         }
 
-        return { usage: toUsage(part.totalUsage), context, stop: chatStop(part.finishReason), nudges: spent.nudges };
+        return { usage: withTools(toUsage(part.totalUsage), req.toolUsage), context, stop: chatStop(part.finishReason), nudges: spent.nudges };
       },
       // Show the real cause, e.g. "Failed to process successful response".
       onError: (e) => (e instanceof Error ? e.message : String(e)),
-      onEnd: ({ messages }) => req.onEnd(messages, { input: spent.input, output: spent.output }),
+      onEnd: ({ messages }) => req.onEnd(messages, withTools({ input: spent.input, output: spent.output }, req.toolUsage)),
     }),
   });
+}
+
+function withTools(usage: Usage, tools: Usage | undefined): Usage {
+  return { input: usage.input + (tools?.input ?? 0), output: usage.output + (tools?.output ?? 0) };
 }
 
 type FinishPart = Extract<ChatPart, { type: "finish" }>;

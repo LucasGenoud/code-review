@@ -24,6 +24,7 @@ import { chatInstructions, MODE_STEPS } from "./chatPrompts";
 import { InputError } from "./errors";
 import { resolveModel, type ResolvedModel } from "./providers";
 import { readRepoFile, repoMap, repoTools, semanticTools, ToolScope, type RepoView } from "./repoTools";
+import { exploreTools } from "./explore";
 import { relevantCode } from "./retrieval";
 import { semanticSearch } from "./semanticIndex";
 import { runCode, usableLanguages } from "./sandbox";
@@ -305,6 +306,8 @@ async function turnSetup(view: RepoView, model: ResolvedModel, mode: ChatMode, c
     seedFor(view, latestQuestion(messages), seedChars),
   ]);
 
+  // Tokens of explorer sub-agents, counted into the answer's.
+  const toolUsage = { input: 0, output: 0 };
   const instructions = chatInstructions({
     mode,
     project: view.project,
@@ -317,7 +320,8 @@ async function turnSetup(view: RepoView, model: ResolvedModel, mode: ChatMode, c
   return {
     instructions,
     history: withSeed(trimToolOutputs(messages), seed),
-    tools: toolCalling ? { ...repoTools(view, ToolScope.Chat), ...semanticTools(view), ...sandboxTools(view.project, languages) } : {},
+    tools: toolCalling ? { ...repoTools(view, ToolScope.Chat), ...semanticTools(view), ...exploreTools(view, model, toolUsage), ...sandboxTools(view.project, languages) } : {},
+    toolUsage,
     budget: { steps: MODE_STEPS[mode], contextTokens: Math.floor(model.model.contextWindow * CONTEXT_SHARE) },
   };
 }
