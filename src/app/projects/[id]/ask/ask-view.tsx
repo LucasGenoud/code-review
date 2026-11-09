@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import type { UIMessage } from "ai";
-import { History, Layers, Loader2, MessageSquare, Pencil, Plus } from "lucide-react";
+import { Download, History, Layers, Loader2, MessageSquare, Pencil, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "cn";
 import { Button } from "@/components/ui/button";
@@ -262,6 +262,18 @@ export function AskView({ project, model, initialThreads, initialThreadId, initi
               Ask the codebase · {model.label} · reads the working tree, never changes files
             </p>
           </div>
+          {active.threadId !== null && (
+            <Button
+              variant="ghost"
+              size="sm"
+              render={<a href={`/api/projects/${project.id}/threads/${active.threadId}/export`} download />}
+              nativeButton={false}
+              title="Download this conversation as Markdown"
+            >
+              <Download />
+              <span className="hidden sm:inline">Export</span>
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="md:hidden" onClick={() => show(null, [])}>
             <Plus />
             New

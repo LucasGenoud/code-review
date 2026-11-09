@@ -64,3 +64,49 @@ export const CHAT_MODES: Record<ChatMode, { label: string; hint: string; placeho
     placeholder: "Describe the change, e.g. Add CSV export to reports",
   },
 };
+
+// Answers end with "Follow-ups: q1 | q2 | q3" (see chatPrompts); the chat
+// shows them as buttons instead of text.
+const FOLLOW_UPS = "Follow-ups:";
+const MAX_FOLLOW_UPS = 3;
+
+// The answer without its follow-ups line, and the questions it suggests.
+// A last line still streaming in ("Follow-u") is held back too.
+//   "Keys are sealed…\nFollow-ups: Who rotates them? | Where is the secret?"
+//   → { body: "Keys are sealed…", followUps: ["Who rotates them?", "Where is the secret?"] }
+export function splitFollowUps(text: string): { body: string; followUps: string[] } {
+  const cut = text.trimEnd().lastIndexOf("\n");
+  const last = text.slice(cut + 1).trim();
+  const partial = last.length > 0 && FOLLOW_UPS.startsWith(last);
+  if (!last.startsWith(FOLLOW_UPS) && !partial) {
+    return { body: text, followUps: [] };
+  }
+
+  const followUps = partial
+    ? []
+    : last
+        .slice(FOLLOW_UPS.length)
+        .split("|")
+        .map((q) => q.trim().replace(/^`|`$/g, ""))
+        .filter(Boolean)
+        .slice(0, MAX_FOLLOW_UPS);
+  return { body: cut < 0 ? "" : text.slice(0, cut).trimEnd(), followUps };
+}
+
+// e.g. "src/pay.ts:42", `src/pay.ts:42-50`. A "/" or a known extension
+// tells a path from host:port.
+const CITED = /(?:^|[\s(`[])((?:[\w.-]+\/)*[\w.-]+\.\w{1,8}):(\d+)/g;
+
+export type CitedFile = { path: string; line: number };
+
+// Files an answer cites, in order of first mention, each at its first line.
+export function citedFiles(text: string): CitedFile[] {
+  const seen = new Map<string, number>();
+  for (const m of text.matchAll(CITED)) {
+    if (!seen.has(m[1]) && (m[1].includes("/") || !/^\d/.test(m[1]))) {
+      seen.set(m[1], Number(m[2]));
+    }
+  }
+
+  return [...seen].map(([path, line]) => ({ path, line }));
+}

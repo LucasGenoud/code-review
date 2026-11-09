@@ -195,6 +195,7 @@ export function ChatPanel(props: Props) {
                     onOpenFile={onOpenFile}
                     onAsk={(text) => void send(text)}
                     onSave={onSaveAnswer && m.role === "assistant" ? (answer) => onSaveAnswer(answer, questionBefore(messages, m.id)) : undefined}
+                    onFollowUp={!busy && m === messages.at(-1) ? (q) => void send(q) : undefined}
                   />
                 ))}
                 {status === "submitted" && <p className="animate-pulse text-sm text-muted-foreground">Thinking…</p>}

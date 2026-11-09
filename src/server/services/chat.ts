@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import { z } from "zod";
-import { ChatMode, SUMMARY_PREFIX, type ChatMetadata, type TokenUsage } from "@/lib/chat";
+import { ChatMode, splitFollowUps, SUMMARY_PREFIX, type ChatMetadata, type TokenUsage } from "@/lib/chat";
 import { FindingStatus, ruleKey } from "@/lib/domain";
 import type { SandboxLanguage } from "@/lib/sandbox";
 import {
@@ -265,6 +265,45 @@ export async function compactThread(projectId: number, threadId: number): Promis
   saveMessages({ threadId }, [summary]);
   touchThread(threadId);
   return [summary];
+}
+
+// A codebase conversation as Markdown, for the Export button: questions,
+// answers (diagrams included) and the tools each answer used, e.g.
+//   # How are keys stored?
+//   ## Question …
+//   ## Answer
+//   _Tools: locate, read_symbol ×2_
+//   Keys are sealed in src/crypto.ts:12 …
+export function threadMarkdown(projectId: number, threadId: number): { filename: string; markdown: string } {
+  const thread = ownThread(projectId, threadId);
+  const project = projectById(projectId);
+  const messages = loadMessages({ threadId }) as UIMessage[];
+  const lines = [`# ${thread.title || "Conversation"}`, `_${project?.name ?? "Project"} · exported ${new Date().toISOString().slice(0, 10)}_`];
+
+  for (const m of messages) {
+    const text = m.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n\n");
+    if (m.role === "user") {
+      lines.push(text.startsWith(SUMMARY_PREFIX) ? `## Earlier conversation (summary)\n\n${text.slice(SUMMARY_PREFIX.length)}` : `## Question\n\n${text}`);
+      continue;
+    }
+
+    const tools = toolCounts(m);
+    lines.push(`## Answer${tools ? `\n\n_Tools: ${tools}_` : ""}\n\n${splitFollowUps(text).body}`);
+  }
+
+  return { filename: `conversation-${threadId}.md`, markdown: `${lines.join("\n\n")}\n` };
+}
+
+// "locate, read_symbol ×2" for an answer's tool calls.
+function toolCounts(message: UIMessage): string {
+  const counts = new Map<string, number>();
+  for (const p of message.parts) {
+    if (isToolUIPart(p)) {
+      counts.set(getToolName(p), (counts.get(getToolName(p)) ?? 0) + 1);
+    }
+  }
+
+  return [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(", ");
 }
 
 function compactInstructions(project: Project): string {

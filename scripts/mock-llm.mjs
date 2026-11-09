@@ -242,7 +242,9 @@ flowchart TD
 **Steps**
 1. src/components/chat/chat-panel.tsx:114 sends the question.
 2. src/server/services/chat.ts:206 builds the turn and attaches retrieved code.
-3. src/server/drivers/llm.ts:250 streams the answer back.`;
+3. src/server/drivers/llm.ts:250 streams the answer back.
+
+Follow-ups: How is retrieved code ranked? | What happens when the model stalls?`;
 
 const BROKEN_DIAGRAM = "Here it is:\n\n\`\`\`mermaid\nflowchart TD\n  A[\"start\" --> B(end\n\`\`\`";
 
@@ -253,8 +255,25 @@ function chatAnswer(body) {
     return BROKEN.test(question) ? BROKEN_DIAGRAM : DIAGRAM_ANSWER;
   }
 
-  return `Mock answer. You asked: "${question}". A real model would read the code with the tools and explain the finding here.`;
+  return `Mock answer. You asked: "${question}". A real model would read the code with the tools, e.g. src/server/services/chat.ts:206 and src/server/drivers/llm.ts:250.\n\nFollow-ups: How is the answer streamed? | Where are threads saved?`;
 }
+
+// Asked for a tour: first delegates to two explorers, then answers from
+// their reports. Explorers (non-streamed, "You are an explorer") report.
+const TOUR = /tour/i;
+const EXPLORER = "You are an explorer";
+
+function exploreCalls(body) {
+  const last = [...body.messages].reverse().find((m) => m.role === "user");
+  if (!TOUR.test(text(last?.content).slice(0, 120)) || body.messages.some((m) => m.role === "tool")) {
+    return null;
+  }
+
+  const call = (id, assignment) => ({ index: id, id: `explore-${id}-${Date.now()}`, type: "function", function: { name: "explore", arguments: JSON.stringify({ assignment, focus: null }) } });
+  return [call(0, "How does a chat question reach the model?"), call(1, "How are answers stored and resumed?")];
+}
+
+const EXPLORER_REPORT = "Questions go through `projectChatResponse` in src/server/services/chat.ts:206, which streams via src/server/drivers/llm.ts:250. Threads are saved by src/server/drivers/chatStore.ts:30.";
 
 function usage(body, out) {
   const prompt = Math.ceil(JSON.stringify(body.messages).length / 4);
@@ -300,8 +319,23 @@ const server = http.createServer(async (req, res) => {
   const body = JSON.parse(raw);
   await delay();
 
+  const calls = body.stream && body.tools ? exploreCalls(body) : null;
+  if (calls) {
+    res.writeHead(HTTP_OK, { "content-type": "text/event-stream" });
+    const id = `mock-${Date.now()}`;
+    res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", model: MODEL, choices: [{ index: 0, delta: { role: "assistant", tool_calls: calls } }] })}\n\n`);
+    res.end(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", model: MODEL, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`);
+    return;
+  }
+
   if (body.stream) {
     await stream(res, body, body.tools ? chatAnswer(body) : completion(body));
+    return;
+  }
+
+  if (JSON.stringify(body.messages[0] ?? {}).includes(EXPLORER)) {
+    res.writeHead(HTTP_OK, { "content-type": "application/json" });
+    res.end(JSON.stringify({ id: `mock-${Date.now()}`, object: "chat.completion", model: MODEL, choices: [{ index: 0, message: { role: "assistant", content: EXPLORER_REPORT }, finish_reason: "stop" }], usage: usage(body, EXPLORER_REPORT) }));
     return;
   }
 

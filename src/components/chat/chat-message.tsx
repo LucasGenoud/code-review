@@ -2,24 +2,34 @@
 
 import { Fragment } from "react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
-import { BookmarkPlus, Brain, ChevronRight, FlaskConical, Layers, Loader2, Wrench } from "lucide-react";
+import { BookmarkPlus, Brain, ChevronRight, FileCode, FlaskConical, Layers, Loader2, Telescope, Wrench } from "lucide-react";
 import { cn } from "cn";
-import { SUMMARY_PREFIX, type ChatMetadata } from "@/lib/chat";
+import { citedFiles, splitFollowUps, SUMMARY_PREFIX, type ChatMetadata } from "@/lib/chat";
 import { CopyButton, Markdown, type CiteProps } from "./markdown";
 
 // One chat message: user bubble or assistant markdown,
-// the model's thinking, tool calls as chips, sandbox runs as cards, code
-// blocks and answers with a copy button, a compacted conversation's summary.
+// the model's thinking, tool calls as chips, sandbox runs and explorer
+// reports as cards, code blocks and answers with a copy button, the files
+// an answer cites, its follow-up questions, a compacted conversation's
+// summary.
+//
+//   answer markdown …
+//   Sources  [pay.ts:42] [db.ts:7]
+//   [Who rotates keys?] [Where is the secret?]     ← last answer only
+//   Copy · Save to memory
 
 type ToolPart = Extract<UIMessage["parts"][number], { toolCallId: string }>;
 type ReasoningPart = Extract<UIMessage["parts"][number], { type: "reasoning" }>;
 
 const RUN_CODE = "run_code";
+const EXPLORE = "explore";
+const MAX_SOURCES = 8;
 
 // onSave: offers "Save to memory" on answers; absent = not offered.
-type Props = { message: UIMessage; onSave?: (answer: string) => void } & CiteProps;
+// onFollowUp: shows the answer's follow-up questions as buttons; absent = hidden.
+type Props = { message: UIMessage; onSave?: (answer: string) => void; onFollowUp?: (question: string) => void } & CiteProps;
 
-export function ChatMessage({ message, onSave, ...cite }: Props) {
+export function ChatMessage({ message, onSave, onFollowUp, ...cite }: Props) {
   if ((message.metadata as ChatMetadata | undefined)?.summary) {
     return <SummaryCard message={message} {...cite} />;
   }
@@ -32,25 +42,48 @@ export function ChatMessage({ message, onSave, ...cite }: Props) {
     );
   }
 
-  const answer = messageText(message);
+  // The follow-ups line ends the last text part.
+  const lastText = message.parts.findLastIndex((p) => p.type === "text");
+  const { followUps } = lastText < 0 ? { followUps: [] } : splitFollowUps((message.parts[lastText] as { text: string }).text);
+  const answer = splitFollowUps(messageText(message)).body;
+  const sources = cite.onOpenFile ? citedFiles(answer) : [];
 
   return (
     <div className="group/answer flex flex-col gap-2 text-sm leading-relaxed">
       {message.parts.map((part, i) => {
         if (part.type === "text") {
-          return <Markdown key={i} text={part.text} {...cite} />;
+          return <Markdown key={i} text={i === lastText ? splitFollowUps(part.text).body : part.text} {...cite} />;
         }
 
         if (part.type === "reasoning") {
           return <Reasoning key={i} part={part} />;
         }
 
-        if (isToolUIPart(part)) {
-          return getToolName(part) === RUN_CODE ? <RunCodeCard key={i} part={part} /> : <ToolChip key={i} part={part} />;
+        if (!isToolUIPart(part)) {
+          return null;
         }
 
-        return null;
+        if (getToolName(part) === RUN_CODE) {
+          return <RunCodeCard key={i} part={part} />;
+        }
+
+        return getToolName(part) === EXPLORE ? <ExploreCard key={i} part={part} {...cite} /> : <ToolChip key={i} part={part} />;
       })}
+      {sources.length > 0 && cite.onOpenFile && <Sources files={sources} onOpen={cite.onOpenFile} />}
+      {onFollowUp && followUps.length > 0 && (
+        <div className="flex flex-wrap gap-1.5" aria-label="Follow-up questions">
+          {followUps.map((q) => (
+            <button
+              key={q}
+              type="button"
+              onClick={() => onFollowUp(q)}
+              className="rounded-full border bg-background px-3 py-1 text-left text-xs text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
       {answer && (
         <div className="flex gap-1 self-start opacity-0 transition-opacity group-hover/answer:opacity-100 focus-within:opacity-100">
           <CopyButton text={answer} label="Copy answer" />
@@ -68,6 +101,53 @@ export function ChatMessage({ message, onSave, ...cite }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+// The files an answer cites, as buttons opening each at its first cited line.
+function Sources({ files, onOpen }: { files: { path: string; line: number }[]; onOpen: (path: string, line: number) => void }) {
+  const shown = files.slice(0, MAX_SOURCES);
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-xs" aria-label="Sources">
+      <span className="text-muted-foreground">Sources</span>
+      {shown.map((f) => (
+        <button
+          key={f.path}
+          type="button"
+          onClick={() => onOpen(f.path, f.line)}
+          title={`${f.path}:${f.line}`}
+          className="inline-flex max-w-56 items-center gap-1 rounded-md border bg-muted/40 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <FileCode className="size-3 shrink-0" aria-hidden />
+          <span className="truncate">{f.path.split("/").at(-1)}:{f.line}</span>
+        </button>
+      ))}
+      {files.length > shown.length && <span className="text-muted-foreground">+{files.length - shown.length}</span>}
+    </div>
+  );
+}
+
+// An explorer sub-agent: its assignment, then its report as markdown with
+// clickable citations. Collapsed once done: the answer builds on it.
+function ExploreCard({ part, ...cite }: { part: ToolPart } & CiteProps) {
+  const done = part.state === "output-available" || part.state === "output-error";
+  const assignment = (part.input as { assignment?: string } | undefined)?.assignment ?? "";
+
+  return (
+    <details className="group rounded-lg border bg-card text-sm">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        {done ? <Telescope className="size-3.5 shrink-0" aria-hidden /> : <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden />}
+        <span className="shrink-0 font-medium">{done ? "Explorer" : "Exploring"}</span>
+        <span className="truncate">{assignment}</span>
+        {done && <ChevronRight className="ml-auto size-3 shrink-0 transition-transform group-open:rotate-90" aria-hidden />}
+      </summary>
+      {done && (
+        <div className="border-t px-3 py-2 leading-relaxed">
+          {part.state === "output-error" ? <p className="text-red-700 dark:text-red-300">{part.errorText}</p> : <Markdown text={String(part.output ?? "")} {...cite} />}
+        </div>
+      )}
+    </details>
   );
 }
 
