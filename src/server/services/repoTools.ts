@@ -2,7 +2,7 @@ import path from "node:path";
 import picomatch from "picomatch";
 import { z } from "zod";
 import { DiffMode } from "@/lib/domain";
-import { grepAt, log, trackedFiles, wordUsages } from "@/server/drivers/git";
+import { blame, grepAt, log, showCommit, trackedFiles, wordUsages } from "@/server/drivers/git";
 import { defineTool, type ChatTool } from "@/server/drivers/llm";
 import { filesForReview } from "@/server/drivers/reviewStore";
 import type { Project, Review } from "@/server/drivers/schema";
@@ -40,10 +40,15 @@ const MAX_SEARCH_CONTEXT = 5;
 const TALLY_FILES = 6;
 const DEFAULT_LOG_ENTRIES = 15;
 const MAX_LOG_ENTRIES = 50;
+// Lines blamed per call, and lines of a shown commit.
+const MAX_BLAME_LINES = 200;
+const MAX_SHOW_LINES = 400;
 // Repository map: deepest directory level tried, and files listed in full
 // when the repository is this small.
 const MAX_MAP_DEPTH = 6;
 const FULL_MAP_FILES = 150;
+// e.g. 1e2c9e5, HEAD~2, v1.4: no leading dash, so never an option.
+const COMMIT_REF = /^[\w.\/^~@{}][\w.\/^~@{}-]*$/;
 // e.g. savePayment, $store, user_id.
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const NOT_FOUND = "Error: file not found or outside the repository. Check the path against the repository map, or use list_files.";
@@ -170,12 +175,36 @@ export function repoTools(view: RepoView, scope: ToolScope): Record<string, Chat
 
   if (scope === ToolScope.Chat) {
     tools.git_log = defineTool({
-      description: "Recent commits, optionally for one file: who changed it, when, why.",
+      description: "Recent commits, optionally for one file or since a date: who changed it, when, why.",
       input: z.object({
         path: z.string().nullable(),
+        since: z.string().nullable().describe("e.g. 2026-10-01 or 3 weeks ago"),
         limit: z.number().int().min(1).max(MAX_LOG_ENTRIES).nullable(),
       }),
-      run: async ({ path: file, limit }) => log(project.path, file ?? undefined, limit ?? DEFAULT_LOG_ENTRIES),
+      run: async ({ path: file, since, limit }) => (await log(project.path, file ?? undefined, limit ?? DEFAULT_LOG_ENTRIES, since ?? undefined)) || "(no commits)",
+    });
+    tools.git_blame = defineTool({
+      description: `Who last changed each line of a range, when, and the commit subjects: answers "why is this here". At most ${MAX_BLAME_LINES} lines.`,
+      input: z.object({
+        path: z.string().describe("Path relative to the repository root"),
+        startLine: z.number().int().min(1),
+        endLine: z.number().int().min(1),
+      }),
+      run: async ({ path: file, startLine, endLine }) => {
+        const to = Math.min(endLine, startLine + MAX_BLAME_LINES - 1);
+        return blame(project.path, file, startLine, to, sha).catch((e: unknown) => `Error: ${firstLine(e)}. Check the path and that the range exists.`);
+      },
+    });
+    tools.git_show = defineTool({
+      description: "A commit's full message, changed files and patch (from git_log or git_blame), optionally limited to one file.",
+      input: z.object({
+        commit: z.string().regex(COMMIT_REF).describe("e.g. 1e2c9e5 or HEAD~2"),
+        path: z.string().nullable(),
+      }),
+      run: async ({ commit, path: file }) => {
+        const out = await showCommit(project.path, commit, file ?? undefined);
+        return out === null ? `Error: no commit ${commit}.` : capText(out, MAX_SHOW_LINES);
+      },
     });
   }
 
@@ -302,6 +331,16 @@ function directoryCounts(files: string[], depth: number): string[] {
 
 function numbered(lines: string[], first: number): string {
   return lines.map((l, i) => `${first + i}: ${l}`).join("\n");
+}
+
+// The first `max` lines of `text`, blank lines kept (a patch needs them).
+function capText(text: string, max: number): string {
+  const lines = text.split("\n");
+  return lines.length <= max ? text : `${lines.slice(0, max).join("\n")}\n… ${lines.length - max} more lines; pass path to see one file`;
+}
+
+function firstLine(e: unknown): string {
+  return e instanceof Error ? e.message.split("\n")[0] : "git failed";
 }
 
 function capLines(text: string): string {

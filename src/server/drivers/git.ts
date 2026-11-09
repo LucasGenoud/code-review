@@ -279,8 +279,44 @@ function withoutSha(out: string, sha: string | null): string {
     .join("\n");
 }
 
-export async function log(dir: string, file: string | undefined, limit: number): Promise<string> {
+export async function log(dir: string, file: string | undefined, limit: number, since?: string): Promise<string> {
   const args = ["log", `-n${limit}`, "--format=%h %ad %an: %s", "--date=short"];
+  if (since) {
+    args.push(`--since=${since}`);
+  }
+
+  if (file) {
+    args.push("--", file);
+  }
+
+  return git(dir, args);
+}
+
+// Who last changed each line of `file` from `from` to `to`, at commit `sha`
+// or in the working tree, then the subjects of the commits involved:
+//   "1e2c9e5 (Ann 2026-10-02  40) export function pay(" … "1e2c9e5 Fix rounding in pay"
+// Uncommitted lines show as 00000000 "Not Committed Yet".
+export async function blame(dir: string, file: string, from: number, to: number, sha: string | null): Promise<string> {
+  const args = ["blame", "--date=short", "-L", `${from},${to}`, ...(sha ? [sha] : []), "--", file];
+  const lines = await git(dir, args);
+  const shas = [...new Set(lines.split("\n").map((l) => l.split(" ")[0].replace(/^\^/, "")).filter((h) => h && !/^0+$/.test(h)))];
+  if (shas.length === 0) {
+    return lines;
+  }
+
+  const subjects = await git(dir, ["log", "--no-walk=unsorted", "--format=%h %s", ...shas]);
+  return `${lines}\nCommits:\n${subjects}`;
+}
+
+// A commit's message, changed files and patch, optionally for one file.
+// Null when `rev` isn't a commit.
+export async function showCommit(dir: string, rev: string, file?: string): Promise<string | null> {
+  const sha = await resolveCommit(dir, rev);
+  if (!sha) {
+    return null;
+  }
+
+  const args = ["show", "--stat", "--patch", "--no-color", "--format=commit %H%nAuthor: %an%nDate: %ad%n%n%B", "--date=short", sha];
   if (file) {
     args.push("--", file);
   }

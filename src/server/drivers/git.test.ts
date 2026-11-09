@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import { FileChange } from "@/lib/domain";
-import { changedBetween, changedFiles, diff, wordUsages } from "./git";
+import { blame, changedBetween, changedFiles, diff, showCommit, wordUsages } from "./git";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prr-git-"));
 let nextRepo = 0;
@@ -86,4 +86,23 @@ it("finds whole-word usages at a commit or in the working tree", async () => {
   expect(await wordUsages(repo, "balance", sha, 1)).toBe("Pay.java:1:long r = balance(inv);\nPay.java-2-long balanced = 0;\n");
   expect(await wordUsages(repo, "balance", null, 0)).toContain("New.java:1:balance(x);");
   expect(await wordUsages(repo, "missing", sha, 0)).toBe("");
+});
+
+it("blames a range with the commits' subjects", async () => {
+  const repo = repoWith({ "a.ts": "one\ntwo\nthree\n" });
+
+  const out = await blame(repo, "a.ts", 2, 3, null);
+
+  expect(out).toMatch(/^\^?[0-9a-f]+ \(t +\d{4}-\d{2}-\d{2} +2\) two$/m);
+  expect(out).toMatch(/Commits:\n[0-9a-f]+ Base/);
+});
+
+it("shows a commit's message and patch, or null for a bad ref", async () => {
+  const repo = repoWith({ "a.ts": "one\n" });
+
+  const out = await showCommit(repo, "HEAD");
+
+  expect(out).toContain("Base");
+  expect(out).toContain("+one");
+  expect(await showCommit(repo, "--output=x")).toBeNull();
 });
